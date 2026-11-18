@@ -1,0 +1,15 @@
+[submodule "pico-sdk"]
+	path = pico-sdk
+	url = https://github.com/raspberrypi/pico-sdk.git
+[submodule "libsmb2"]
+	path = libsmb2
+	url = https://github.com/yunkya2/libsmb2.git
+[submodule "FreeRTOS-Kernel"]
+	path = FreeRTOS-Kernel
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+[submodule "x68kserremote"]
+	path = x68kserremote
+	url = https://github.com/yunkya2/x68kserremote.git
+[submodule "lib/FatFs_SD"]
+	path = lib/FatFs_SD
+	url = https://github.com/carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico.git
