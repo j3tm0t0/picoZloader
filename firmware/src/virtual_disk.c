@@ -1,0 +1,789 @@
+/* 
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2023,2024,2025 Yuichi Nakamura
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ */
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include "hardware/watchdog.h"
+#include "pico/cyw43_arch.h"
+
+#include "smb2.h"
+#include "libsmb2.h"
+
+#include "main.h"
+#include "virtual_disk.h"
+#include "config_file.h"
+#include "remoteserv.h"
+#include "fileop.h"
+#include "netpipe.h"
+#include "msclog.h"
+#include "bootwait.h"
+
+#include "scsiremote.inc"
+#include "bootloader.inc"
+#include "hdsboot.inc"
+#include "sdhds.h"
+#include "sdfs.h"
+#include "settingui.inc"
+
+//****************************************************************************
+// Global variables
+//****************************************************************************
+
+int debuglevel = 0;
+
+//****************************************************************************
+// Static variables
+//****************************************************************************
+
+static int remoteunit;
+static bool remoteboot;
+static bool fastconnect;
+
+//****************************************************************************
+// for debugging
+//****************************************************************************
+
+void DPRINTF(int level, char *fmt, ...)
+{
+  if (debuglevel >= level) {
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+  }
+}
+
+//****************************************************************************
+// BPB
+//****************************************************************************
+
+#define lsb_hword(x)    ((x) & 0xff), (((x) >> 8) & 0xff)
+#define lsb_word(x)     ((x) & 0xff), (((x) >> 8) & 0xff), \
+                        (((x) >> 16) & 0xff), (((x) >> 24) & 0xff)
+
+#define MEDIA_TYPE 0xf8
+
+static const uint8_t boot_sector[] = {
+    0xeb, 0x58, 0x90,                           //  +0 JmpBoot
+    'M', 'S', 'W', 'I', 'N', '4', '.', '1',     //  +3 OEMName
+    lsb_hword(512),                             // +11 BytsPerSec
+    (CLUSTER_SIZE / SECTOR_SIZE),               // +13 SecPerClus
+    lsb_hword(32),                              // +14 RsvdSecCnt
+    2,                                          // +16 NumFATs
+    lsb_hword(0),                               // +17 RootEntCnt
+    lsb_hword(0),                               // +19 TotSec16
+    MEDIA_TYPE,                                 // +21 Media
+    lsb_hword(0),                               // +22 FATSz16
+    lsb_hword(0x3f),                            // +24 SecPerTrk
+    lsb_hword(0xff),                            // +26 NumHeads
+    lsb_word(0),                                // +28 HiddSec
+    lsb_word(VOLUME_SECTOR_COUNT),              // +32 TotSec32
+    lsb_word(FAT_SECTORS),                      // +36 FATSz32
+    lsb_hword(0),                               // +40 ExtFlags
+    lsb_hword(0),                               // +42 FSVer
+    lsb_word(2),                                // +44 RootClus
+    lsb_hword(1),                               // +48 FSInfo
+    lsb_hword(6),                               // +50 BkBootSec
+    0,0,0,0,0,0,0,0,0,0,0,0,                    // +52 Reserved
+    0x80,                                       // +64 DrvNum
+    0,                                          // +65 Reserved
+    0x29,                                       // +66 BootSig
+    lsb_word(0x12345678),                       // +67 VolID
+    'N', 'O', ' ', 'N', 'A', 'M', 'E', ' ', ' ', ' ', ' ',  // +71 VolLab
+    'F', 'A', 'T', '3', '2', ' ', ' ', ' ',                 // +82 FilSysType
+    0xeb, 0xfe // while(1)                      // +90 BootCode32
+};
+
+static const uint8_t fsinfo1[] = {
+    lsb_word(0x41615252)            //   +0 LeadSig
+};
+static const uint8_t fsinfo2[] = {
+    lsb_word(0x61417272),           // +484 StrucSig
+    lsb_word(0xffffffff),           // +488 Free_Count
+    lsb_word(0xffffffff),           // +492 Nxt_Free
+    lsb_word(0),                    // +496 reserved
+    lsb_word(0),                    // +500 reserved
+    lsb_word(0),                    // +504 reserved
+    lsb_word(0xaa550000)            // +508 TrailSig
+};
+
+//****************************************************************************
+// Directory entry
+//****************************************************************************
+
+#define ATTR_READONLY       0x01
+#define ATTR_HIDDEN         0x02
+#define ATTR_SYSTEM         0x04
+#define ATTR_VOLUME_LABEL   0x08
+#define ATTR_DIR            0x10
+#define ATTR_ARCHIVE        0x20
+
+struct dir_entry {
+    uint8_t name[11];
+    uint8_t attr;
+    uint8_t ntRes;
+    uint8_t crtTimeTenth;
+    uint16_t crtTime;
+    uint16_t crtDate;
+    uint16_t lstAccDate;
+    uint16_t fstClusHI;
+    uint16_t wrtTime;
+    uint16_t wrtDate;
+    uint16_t fstClusLO;
+    uint32_t fileSize;
+};
+
+void init_dir_entry(struct dir_entry *entry, const char *fn,
+                    int attr, int ntres, int cluster, int len)
+{
+    memcpy(entry->name, fn, 11);
+    entry->attr = (attr == 0) ? ATTR_ARCHIVE : attr;
+    entry->ntRes = ntres;
+    entry->crtTimeTenth = 0;
+    entry->crtTime =  entry->wrtTime =
+        ((12 << 11) | (0 << 5) | (0 >> 1));
+    entry->crtDate = entry->wrtDate = entry->lstAccDate =
+        (((2025 - 1980) << 9) | (1 << 5) | (1));
+    entry->fstClusHI = cluster >> 16;
+    entry->fstClusLO = cluster & 0xffff;
+    entry->fileSize = len;
+}
+
+//****************************************************************************
+// Virtual FAT32 functions
+//****************************************************************************
+
+static uint32_t fat[SECTOR_SIZE];
+static uint8_t rootdir[32 * 8];
+static uint8_t x68zdir[32 * 8];
+static uint8_t imagedir[32 * 16];
+static uint8_t pscsiini[256];
+static int imagedir_init = false;
+
+static bool smb2_hds;                   /* SMB2 の上の HDS がある (無ければ Wi-Fi の接続を待たずに見せる) */
+
+static void vd_sync(void)
+{
+    static bool synced = false;
+    if (!synced && !smb2_hds && !remoteboot)
+        synced = true;                  /* HDS が全部 SD カードの上: 待たない */
+    if (!synced) {
+#if MSC_LOG
+        uint32_t t = to_ms_since_boot(get_absolute_time());
+        msclog_mark("vd_sync wait (sysstatus %d)", sysstatus);
+#endif
+        xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+#if MSC_LOG
+        msclog_mark("vd_sync done %lums", (unsigned long)(to_ms_since_boot(get_absolute_time()) - t));
+#endif
+        synced = true;
+    }
+}
+
+/* Z に見せるリモートドライブのユニット数 (今は config.remoteunit と同じ。SD のユニットも REMOTE の欄で数える) */
+int vd_remoteunit(void)
+{
+    return remoteunit;
+}
+
+int vd_init(void)
+{
+    uint32_t nvalue;
+    struct dir_entry *dirent;
+    int len;
+
+    setenv("TZ", config.tz, true);
+    sdc_init();
+
+    remoteunit = atoi(config.remoteunit);
+    remoteboot = atoi(config.remoteboot);
+    fastconnect = atoi(config.fastconnect);
+
+    if (strlen(config.wifi_ssid) == 0 || strlen(config.smb2_server) == 0) {
+        /* not configured */
+        for (int i = 0; i < 6; i++) {
+            diskinfo[i].type = DTYPE_REMOTEBOOT;
+            diskinfo[i].size = 0x800;
+        }
+    } else {
+        /* Set up remote drive boot */
+        int id = 0;
+        if (remoteboot) {
+            diskinfo[id].type = DTYPE_REMOTEBOOT;
+            diskinfo[id].size = 0x20000;
+            id++;
+        }
+
+        /* Set up remote HDS */
+        for (int i = 0; i < countof(config.hds); i++, id++) {
+            if (strlen(config.hds[i]) == 0)
+                continue;
+            diskinfo[id].type = DTYPE_HDS;
+            if (sdhds_is(config.hds[i])) {
+                /* SD カードの上の HDS: ここで開いて本当の大きさにする (Wi-Fi を待たない) */
+                void *h;
+                int64_t sz = sdhds_open(config.hds[i], &h);
+                if (sz < 0) {
+                    diskinfo[id].type = DTYPE_NOTUSED;
+                    continue;
+                }
+                diskinfo[id].sfh = h;
+                diskinfo[id].smb2 = NULL;
+                diskinfo[id].size = sz;
+                printf("HDS%u: %s size=%lld (SD)\n", i, config.hds[i], sz);
+#if BOOTWAIT_SCREEN
+                if (id == 0)
+                    bw_direct();        /* 起動ディスク: LBA 2-3 を待ち IPL にして Pico Z Loader の画面を出す */
+#endif
+                continue;
+            }
+            smb2_hds = true;
+            diskinfo[id].size = 0xfffffe00; /* tentative size */
+        }
+
+        /* SD カードをリモートドライブのユニットにする (SMB のユニットの後ろ = B: の次の C:。SCSI ID は増やさないので
+           B: はずれない)。REMOTE の欄に "sd:/..." と書いたユニットだけ (明示したときだけ): 自動で足すと、後ろの
+           ドライブ名が 1 つずつ下がる (Z の内蔵 FD は C: D: から D: E: に)。Wi-Fi を待たない */
+        for (int i = 0; i < remoteunit && i < 8; i++) {
+            if (!sdhds_is(config.remote[i]))
+                continue;
+            struct smb2_stat_64 st;
+            if (sdfs_stat(config.remote[i], &st) == 0 && st.smb2_type == SMB2_TYPE_DIRECTORY) {
+                rootpath[i] = config.remote[i];
+                printf("REMOTE%u: %s (SD)\n", i, config.remote[i]);
+            }
+        }
+    }
+
+    /* SCSI ID 6 : for remote communication */
+    diskinfo[6].type = DTYPE_REMOTECOMM;
+    /* netpipe の帯は netpipe.h (0x200000 セクタ未満)。0xfffffe00 にした版では Z が起動しなかったが、
+       電源投入時に Pico の接続が間に合わなかっただけかもしれない (未確認) */
+    diskinfo[6].size = 0x80000000;
+
+    for (int i = 0; i < 7; i++) {
+        diskinfo[i].sects = (diskinfo[i].size + SECTOR_SIZE - 1) / SECTOR_SIZE;
+    }
+
+    strcpy(pscsiini, "[pscsi]\r\n");
+    for (int i = 0; i < 7; i++) {
+        if (diskinfo[i].type != DTYPE_NOTUSED) {
+            char str[32];
+            sprintf(str, "ID%d=image/%d%s.hds\r\n",
+                i, i,
+                diskinfo[i].type == DTYPE_REMOTEBOOT ? "remote" : 
+                (diskinfo[i].type == DTYPE_HDS ? "rmthds" : "rmtcom"));
+            strcat(pscsiini, str);
+        }
+    }
+
+    /* Initialize FAT */
+
+    memset(fat, 0, sizeof(fat));
+    fat[0] = 0x0fffff00u | MEDIA_TYPE;
+    fat[1] = 0x0fffffff;
+    fat[2] = 0x0ffffff8;    /* cluster 2: root directory */
+    fat[3] = 0x0fffffff;    /* cluster 3: X68000Z directory */
+    fat[4] = 0x0fffffff;    /* cluster 4: pscsi.ini */
+    fat[5] = 0x0fffffff;    /* cluster 5: log.txt */
+    fat[6] = 0x0fffffff;    /* cluster 6: config.txt */
+    fat[7] = 0x0fffffff;    /* cluster 7: X68000Z/image directory */
+
+    /* Initialize root directory */
+
+    memset(rootdir, 0, sizeof(rootdir));
+    dirent = (struct dir_entry *)rootdir;
+    init_dir_entry(dirent++, "LOG     TXT", 0, 0x18, 5, LOGSIZE);
+    init_dir_entry(dirent++, "CONFIG  TXT", 0, 0x18, 6, strlen(configtxt));
+    init_dir_entry(dirent++, "X68000Z    ", ATTR_DIR, 0, 3, 0);
+
+#if 0
+    if (!fastconnect)
+        vd_sync();
+#endif
+
+    /* Initialize "X68000Z" directory */
+
+    memset(x68zdir, 0,  sizeof(x68zdir));
+    dirent = (struct dir_entry *)x68zdir;
+    init_dir_entry(dirent++, ".          ", ATTR_DIR, 0, 3, 0);
+    init_dir_entry(dirent++, "..         ", ATTR_DIR, 0, 0, 0);
+    init_dir_entry(dirent++, "PSCSI   INI", 0, 0x18, 4, strlen(pscsiini));
+    init_dir_entry(dirent++, "IMAGE      ", ATTR_DIR, 0x18, 7, 0);
+
+    return 0;
+}
+
+uint8_t vdbuf_read[(512 - 16) * 8 * 4];
+uint8_t vdbuf_write[(512 - 16) * 8 * 4];
+int vdbuf_rpages;
+int vdbuf_rcnt;
+/* 応答のページは読まれた LBA から決める (読まれた回数で数えない)。
+   driver/scsiremote.c はページ i を sect + (i & 7) から読み、8 ページごとに sect を 8 下げ、古いキャッシュに当たると
+   sect を 0x10000 下げて読み直す。Z (Linux) はこの帯を 4KB (8 セクタ) 単位でキャッシュし、先読みもするので、Pico に
+   届く読み込みは driver の読み込みと 1 対 1 ではない。回数で数えると先読みや読み直しで vdbuf_rcnt が余分に 8 進み、
+   以降のページが 8 ページ先の中身になる (ヘッダの seqno は今の命令のものなので driver は気づかない。B: から読んだ
+   プログラムの再配置表が壊れて落ちた)。新しい driver は命令のヘッダ reserved[] に読み始めの sect (の下位 16 ビット、
+   8 単位) を入れてくる: ページ = ((起点 - 組) & 0xffff) / 8 * 8 + (lba & 7)。範囲外 (上向きの先読みなど) は署名を
+   壊して返し、driver に捨てさせる。reserved[0] の bit7 が無い古い driver には今までどおり数える。 */
+static int32_t vdbuf_rbase = -1;
+
+struct vdbuf_header vdbuf_header;
+
+#if BOOTWAIT_SCREEN
+extern volatile uint32_t connect_next_ms;   /* connect.c: 次に繋ぎにいく時刻 (0: 試している最中、UINT32_MAX: 予定なし) */
+
+static uint32_t connect_retry_ms(void)
+{
+    uint32_t next = connect_next_ms, now = to_ms_since_boot(get_absolute_time());
+    if (next == 0 || next == UINT32_MAX)
+        return next;
+    return (int32_t)(next - now) > 0 ? next - now : 0;
+}
+
+static int bw_hds0_read(void *ctx, uint32_t lba, uint8_t *buf)
+{
+    return hds_cache_read(diskinfo[0].smb2, diskinfo[0].sfh, lba, buf) < 0 ? -1 : 0;
+}
+#endif
+
+#if BOOTWAIT
+/* HDS の 1 セクタの読み書き。SMB の上の HDS は、接続が切れている間 (smb_down) と接続タスクがつなぎ直している間
+   (remote_sem) は SMB に触らずに NOT READY を返す (msc_disk.c が呼び直し、Z の Linux が出し直す)。SMB の要求が失敗
+   したとき (SMB_IO_TIMEOUT 秒の打ち切りを含む) も、hdscache.c が smb_lost を呼ぶので NOT READY。SD カードの HDS の
+   失敗は今までどおり MEDIUM ERROR */
+static int hds_io(int id, uint32_t lba, uint8_t *buf, bool write)
+{
+    struct smb2_context *smb2 = diskinfo[id].smb2;
+    int r;
+    if (smb2 != NULL && (smb_down || xSemaphoreTake(remote_sem, 0) != pdTRUE))
+        return VD_NOTREADY;
+    r = write ? hds_cache_write(smb2, diskinfo[id].sfh, lba, buf) : hds_cache_read(smb2, diskinfo[id].sfh, lba, buf);
+    if (smb2 != NULL)
+        xSemaphoreGive(remote_sem);
+    if (r < 0)
+        return smb2 != NULL && smb_down ? VD_NOTREADY : VD_IOERR;
+    return 0;
+}
+#endif
+
+int vd_read_block(uint32_t lba, uint8_t *buf)
+{
+    memset(buf, 0, 512);
+
+    if (lba < 0x20) {
+        if (lba == 0 || lba == 6) {
+            // BPB
+            memcpy(buf, boot_sector, sizeof(boot_sector));
+            buf[0x1fe] = 0x55;
+            buf[0x1ff] = 0xaa;
+        } else if (lba == 1) {
+            // FSINFO
+            memcpy(buf, fsinfo1, sizeof(fsinfo1));
+            memcpy(&buf[484], fsinfo2, sizeof(fsinfo2));
+        }
+        return 0;
+    }
+
+    if (lba < 0x4020) {
+        // FAT
+        lba -= 0x20;
+        if (lba >= 0x2000) {
+            lba -= 0x2000;
+        }
+        if (lba == 0) {
+            // FAT for directory and small files
+            memcpy(buf, fat, SECTOR_SIZE);
+        } else if (lba >= 0x400) {
+            // "disk0～6.hds"ファイル用のFATデータを作る
+            uint32_t *lbuf = (uint32_t *)buf;
+            int id = (lba - 0x400) / 0x400;
+            lba %= 0x400;
+            if (diskinfo[id].type != DTYPE_NOTUSED) {
+                // ファイルの大きさを覆うクラスタの数 (端数は 1 クラスタに切り上げ)。鎖はちょうどその数で 0x0fffffff で終わる
+                // (以前は大きさが 32KB で割り切れるとき 1 クラスタ長かった。読むのには害が無いが fsck が指摘する)
+                uint32_t ncl = (uint32_t)(((uint64_t)diskinfo[id].size + CLUSTER_SIZE - 1) / CLUSTER_SIZE);   /* 0xfffffe00 でもあふれない */
+                // アクセスしようとしているFAT領域先頭のクラスタ番号
+                int clsno = 0x20000 + id * 0x20000 + FATENTS_SECT * lba;
+                for (int i = 0; i < FATENTS_SECT; i++) {
+                    uint32_t k = FATENTS_SECT * lba + i;    // ファイルの中のクラスタの番号
+                    if (k + 1 < ncl)
+                        lbuf[i] = clsno + i + 1;            // クラスタチェインを作る
+                    else if (k + 1 == ncl)
+                        lbuf[i] = 0x0fffffff;               // クラスタ末尾
+                }
+            }
+        }
+        return 0;
+    }
+
+    if (lba == 0x4020) {
+        // Root directory
+        memcpy(buf, rootdir, sizeof(rootdir));
+        return 0;
+    }
+    if (lba == 0x4060) {
+        // "X68000Z" directory
+        memcpy(buf, x68zdir, sizeof(x68zdir));
+        return 0;
+    }
+    if (lba == 0x40a0) {
+        // "pscsi.ini" file
+        strcpy(buf, pscsiini);
+        return 0;
+    }
+
+    if (lba == 0x40e0 || lba == 0x40e1) {
+        // "log.txt" file
+        memcpy(buf, &log_txt[(lba - 0x40e0) * SECTOR_SIZE], SECTOR_SIZE);
+        return 0;
+    }
+
+    if (lba >= 0x4120 && lba < 0x4124) {
+        // "config.txt" file
+        memcpy(buf, &configtxt[(lba - 0x4120) * SECTOR_SIZE], SECTOR_SIZE);
+        return 0;
+    }
+
+    if (lba == 0x4160) {
+        // "X68000Z/image" directory
+        if (!imagedir_init) {
+            /* Lazy initialization of "X68000Z/image" directory */
+            struct dir_entry *dirent;
+#if !BOOTWAIT
+            vd_sync();
+#endif
+            memset(imagedir, 0,  sizeof(imagedir));
+            dirent = (struct dir_entry *)imagedir;
+            init_dir_entry(dirent++, ".          ", ATTR_DIR, 0, 4, 0);
+            init_dir_entry(dirent++, "..         ", ATTR_DIR, 0, 0, 0);
+            for (int i = 0; i < 7; i++) {
+                struct diskinfo *di = &diskinfo[i];
+                if (di->type != DTYPE_NOTUSED) {
+                    char fn[16];
+                    sprintf(fn, "%d%s HDS", i,
+                            diskinfo[i].type == DTYPE_REMOTEBOOT ? "REMOTE" : 
+                            (diskinfo[i].type == DTYPE_HDS ? "RMTHDS" : "RMTCOM"));
+                    init_dir_entry(dirent++, fn, 0, 0x18, 0x20000 + 0x20000 * i, diskinfo[i].size);
+                }
+            }
+            imagedir_init = true;
+        }
+        memcpy(buf, imagedir, sizeof(imagedir));
+        return 0;
+    }
+
+    if (lba >= 0x00803fa0) {
+        // "disk0～6.hds" file read
+        lba -= 0x00803fa0;
+        int id = lba / 0x800000;
+        lba %= 0x800000;
+        if (diskinfo[id].type == DTYPE_NOTUSED)
+            return -1;
+        if (lba >= diskinfo[id].sects)
+            return -1;
+        DPRINTF3("disk %d: read 0x%x\n", id, lba);
+
+#if BOOTWAIT
+        /* 接続を待って USB タスクを止めない (止めている間に Z の Linux が 30 秒で諦めてリセットする)。
+           HDS が開けるまでは NOT READY を返し、Z の Linux に待たせる。ID 6 (netpipe など) は接続と関係なく答える */
+        if (diskinfo[id].type == DTYPE_HDS && diskinfo[id].sfh == NULL) {
+#if BOOTWAIT_SCREEN
+            /* 起動ディスクの先頭は控えのとおりに返す (IPL は待ち IPL)。控えが無ければ NOT READY */
+            if (id == 0 && !remoteboot && lba < BW_SNAP_SECTS && bw_usable(config.hds[0])) {
+                static bool marked;
+                if (!marked) {
+                    marked = true;
+                    msclog_mark("snapshot served (waiting IPL)");
+                }
+                return bw_disk_read(lba, buf);
+            }
+#endif
+            return sysstatus >= STAT_CONFIGURED && !smb_down ? VD_IOERR : VD_NOTREADY;   /* smb_down: つなぎ直しの途中 */
+        }
+        if (diskinfo[id].type == DTYPE_REMOTEBOOT)
+            vd_sync();
+#else
+        vd_sync();
+#endif
+
+        if (diskinfo[id].type == DTYPE_HDS && diskinfo[id].sfh != NULL) {
+#if BOOTWAIT_SCREEN
+            if (id == 0 && diskinfo[id].smb2 == NULL && bw_is_direct() && (lba == 2 || lba == 3))
+                return bw_ipl_read(lba, buf);   /* SD カードの起動ディスク: 待ち IPL (S で設定画面) */
+#endif
+            if (lba == 2) {
+                // boot loader
+                memcpy(buf, hdsboot, sizeof(hdsboot));
+                return 0;
+            }
+            if (lba == 0x20 || lba == 0x21) {
+                lba -= 0x20 - 2;
+            }
+#if BOOTWAIT
+            return hds_io(id, lba, buf, false);
+#else
+            if (hds_cache_read(diskinfo[id].smb2, diskinfo[id].sfh, lba, buf) < 0)
+                return -1;
+            return 0;
+#endif
+        }
+
+        if (diskinfo[id].type == DTYPE_REMOTEBOOT ||
+            diskinfo[id].type == DTYPE_REMOTECOMM) {
+            if (lba == 0) {
+                // SCSI disk signature
+                memcpy(buf, "X68SCSI1", 8);
+                memcpy(&buf[16], "X68000ZRemoteDrv", 16);
+                return 0;
+            } else if (lba == 2) {
+                // boot loader
+                memcpy(buf, bootloader, sizeof(bootloader));
+                if (diskinfo[id].type == DTYPE_REMOTEBOOT)
+                    buf[5] = remoteboot ? sysstatus : 0;
+                return 0;
+            }
+        }
+        if (diskinfo[id].type == DTYPE_REMOTEBOOT ||
+            (!remoteboot && diskinfo[id].type == DTYPE_REMOTECOMM)) {
+            if (lba == 4) {
+                // SCSI partition signature
+                memcpy(buf, "X68K", 4);
+                for (int i = 0; i < remoteunit; i++) {
+                    memcpy(buf + 16 + i * 16, "Human68k", 8);
+                }
+                return 0;
+            } else if (lba >= (0x0c00 / 512) && lba < (0x4000 / 512)) {
+                // SCSI device driver
+                lba -= 0xc00 / 512;
+                if (lba <= sizeof(scsiremote) / 512) {
+                    memcpy(buf, &scsiremote[lba * 512], 512);
+                }
+                return 0;
+            }
+        }
+        if (diskinfo[id].type == DTYPE_REMOTEBOOT) {
+            if (lba >= (0x8000 / 512) && lba < (0x20000 / 512)) {
+                // HUMAN.SYS
+                lba -= 0x8000 / 512;
+                uint64_t cur;
+                static uint32_t humanlbamax = (uint32_t)-1;
+                if (lba <= humanlbamax && diskinfo[id].sfh == NULL) {
+                    char human[256];
+                    strcpy(human, rootpath[0]);
+                    strcat(human, "/HUMAN.SYS");
+                    const char *shpath;
+                    diskinfo[id].smb2 = path2smb2(human, &shpath);
+                    char *p = strchr(human, '/') + 1;
+                    if ((diskinfo[id].sfh = smb2_open(diskinfo[id].smb2, p, O_RDONLY)) == NULL) {
+                        DPRINTF1("HUMAN.SYS open failure.\n");
+                    } else {
+                        DPRINTF1("HUMAN.SYS opened.\n");
+                    }
+                }
+                if (diskinfo[id].sfh != NULL &&
+                    smb2_lseek(diskinfo[id].smb2, diskinfo[id].sfh, lba * 512, SEEK_SET, &cur) >= 0) {
+                    if (smb2_read(diskinfo[id].smb2, diskinfo[id].sfh, buf, 512) != 512) {
+                        smb2_close(diskinfo[id].smb2, diskinfo[id].sfh);
+                        diskinfo[id].sfh = NULL;
+                        humanlbamax = lba;
+                        DPRINTF1("HUMAN.SYS closed.\n");
+                    }
+                }
+                return 0;
+            }
+        }
+        if (diskinfo[id].type == DTYPE_REMOTECOMM) {
+            if (lba >= NETPIPE_RLBA && lba < NETPIPE_REND) {
+                return netpipe_read(lba, buf);
+            }
+#if BOOTWAIT_SCREEN
+            if (lba >= BW_STAGE2 && lba < BW_STAGE2 + BW_STAGE2_SECTS)
+                return bw_stage2_read(lba, buf);
+            if (lba >= BW_BAND && lba < BW_BAND_END) {
+                // 待ち IPL (driver/bootwait.S) の問い合わせ
+                uint32_t ip = lwip_ntohl(ip4_addr_get_u32(netif_ip4_addr(&cyw43_state.netif[CYW43_ITF_STA])));
+                bw_reply(lba, buf, !remoteboot && diskinfo[0].type == DTYPE_HDS && diskinfo[0].sfh != NULL,
+                         sysstatus, sysstatus >= STAT_WIFI_CONNECTED ? ip : 0,
+                         to_ms_since_boot(get_absolute_time()), connect_retry_ms(), bw_hds0_read, NULL);
+                return 0;
+            }
+#endif
+            if (lba >= (0x20000 / 512) && lba < (0x40000 / 512)) {
+                // settingui.bin
+                lba -= 0x20000 / 512;
+                if (lba <= sizeof(settingui) / 512) {
+                    memcpy(buf, &settingui[lba * 512], 512);
+                }
+                return 0;
+            } else if (lba >= (0x40000 / 512)) {
+                struct vdbuf *b = (struct vdbuf *)buf;
+                int page;
+                if (vdbuf_rbase >= 0) {
+                    page = (int)(((vdbuf_rbase - (lba & ~7u)) & 0xffff) / 8 * 8 + (lba % 8));
+                } else {
+                    page = vdbuf_rcnt + (lba % 8);
+                    if ((lba % 8) == 7) {
+                        vdbuf_rcnt += 8;
+                    }
+                }
+                b->header = vdbuf_header;
+                b->header.maxpage = vdbuf_rpages;
+                if (vdbuf_rbase >= 0 &&
+                    (page > vdbuf_rpages || page >= (int)(sizeof(vdbuf_read) / (512 - 16)))) {
+                    b->header.signature = 0;            /* 先読みなど: driver の照合 (先頭 12 バイト) に通らない */
+                    b->header.page = 0xff;
+                    memset(b->buf, 0, sizeof(b->buf));
+                } else {
+                    b->header.page = page;
+                    if (page < (int)(sizeof(vdbuf_read) / (512 - 16))) {
+                        memcpy(b->buf, &vdbuf_read[page * (512 - 16)], sizeof(b->buf));
+                    } else {
+                        // 従来方式で数えすぎた: バッファの外は読まない
+                        memset(b->buf, 0, sizeof(b->buf));
+                    }
+                }
+                return 0;
+            }
+        }
+    }
+
+    return -1;
+}
+
+static int configtxtlen = 0;
+
+int vd_write_block(uint32_t lba, uint8_t *buf)
+{
+#if BOOTWAIT
+    if (lba == 0x4160) {
+        // "X68000Z/image" directory: Z の Linux がファイルの更新時刻を書き戻すだけ (捨てる)
+        return 0;
+    }
+#endif
+    if (lba == 0x4020) {
+        // Root directory
+        if (memcmp(&buf[32], "CONFIG  TXT", 11) == 0) {
+            configtxtlen = *(uint32_t *)&buf[60];
+        }
+        return 0;
+    }
+
+    if (lba >= 0x4120 && lba < 0x4124) {
+        // "config.txt" file update
+        memcpy(&configtxt[(lba - 0x4120) * SECTOR_SIZE], buf, SECTOR_SIZE);
+        if (configtxtlen > 0 &&
+            (lba - 0x4120) == (configtxtlen - 1) / SECTOR_SIZE) {
+                configtxt[configtxtlen] = '\0';
+                configtxt[sizeof(configtxt) - 1] = '\0';
+            config_parse(configtxt);
+            config_write();
+
+            // reboot by watchdog
+            watchdog_enable(500, 1);
+            while (1)
+                ;
+        }
+    }
+
+    if (lba >= 0x00803fa0) {
+        // "disk0～6.hds" file write
+        lba -= 0x00803fa0;
+        int id = lba / 0x800000;
+        lba %= 0x800000;
+        if (diskinfo[id].type == DTYPE_NOTUSED)
+            return -1;
+        if (lba >= diskinfo[id].sects)
+            return -1;
+        DPRINTF3("disk %d: write 0x%x\n", id, lba);
+
+#if BOOTWAIT
+        if (diskinfo[id].type == DTYPE_HDS && diskinfo[id].sfh == NULL)
+            return sysstatus >= STAT_CONFIGURED && !smb_down ? VD_IOERR : VD_NOTREADY;   /* smb_down: つなぎ直しの途中 */
+        if (diskinfo[id].type == DTYPE_REMOTECOMM && lba >= NETPIPE_WLBA && lba < NETPIPE_WLBA + 8)
+            return netpipe_write(lba, buf);     /* netpipe は SMB の接続を待たない */
+        if (diskinfo[id].type != DTYPE_REMOTECOMM)
+            vd_sync();                          /* 設定画面 (ID 6 の vd_command) は接続を待たない (待ち IPL から入る) */
+#else
+        vd_sync();
+#endif
+
+        if (diskinfo[id].type == DTYPE_HDS && diskinfo[id].sfh != NULL) {
+#if BOOTWAIT
+            return hds_io(id, lba, buf, true);
+#else
+            if (hds_cache_write(diskinfo[id].smb2, diskinfo[id].sfh, lba, buf) < 0)
+                return -1;
+            return 0;
+#endif
+        }
+        if (diskinfo[id].type == DTYPE_REMOTECOMM) {
+            if (lba >= NETPIPE_WLBA && lba < NETPIPE_WLBA + 8) {
+                return netpipe_write(lba, buf);
+            }
+            struct vdbuf *b = (struct vdbuf *)buf;
+            if (b->header.signature != 0x5a383658) {   /* "X68Z" (big endian) */
+                return -1;
+            }
+            vdbuf_header = b->header;
+            memcpy(&vdbuf_write[b->header.page * (512 - 16)], b->buf, sizeof(b->buf));
+            if (b->header.page == b->header.maxpage) {
+                // last page copy
+                int rsize;
+#if BOOTWAIT
+                /* 接続タスクが繋ぎにいっている間 (Wi-Fi は最大 30 秒) は USB タスクを止めず NOT READY で待たせる
+                   (msc_disk.c が呼び直し、Z の Linux が出し直す) */
+                if (xSemaphoreTake(remote_sem, 0) != pdTRUE)
+                    return VD_NOTREADY;
+#else
+                xSemaphoreTake(remote_sem, portMAX_DELAY);
+#endif
+                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+                if ((rsize = vd_command(vdbuf_write, vdbuf_read)) < 0) {
+#if BOOTWAIT
+                    if (sysstatus < STAT_CONFIGURED)
+                        rsize = -1;             /* リモートドライブ (B:) はまだ使えない */
+                    else
+#endif
+                    rsize = remote_serv(vdbuf_write, vdbuf_read);
+                }
+                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+                xSemaphoreGive(remote_sem);
+                vdbuf_rpages = (rsize < 0) ? 0 : ((rsize - 1) / (512 - 16));
+                vdbuf_rcnt = 0;
+                vdbuf_rbase = (vdbuf_header.reserved[0] & 0x80) ?
+                              (((vdbuf_header.reserved[0] & 0x1f) << 8 | vdbuf_header.reserved[1]) << 3) : -1;
+                DPRINTF3("vdbuf_rpages=%d\n", vdbuf_rpages);
+            }
+            return 0;
+        }
+    }
+
+    return -1;
+}
