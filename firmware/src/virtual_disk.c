@@ -257,6 +257,10 @@ int vd_init(void)
                 diskinfo[id].smb2 = NULL;
                 diskinfo[id].size = sz;
                 printf("HDS%u: %s size=%lld (SD)\n", i, config.hds[i], sz);
+#if BOOTWAIT_SCREEN
+                if (id == 0)
+                    bw_direct();        /* 起動ディスク: LBA 2-3 を待ち IPL にして Pico Z Loader の画面を出す */
+#endif
                 continue;
             }
             smb2_hds = true;
@@ -530,6 +534,10 @@ int vd_read_block(uint32_t lba, uint8_t *buf)
 #endif
 
         if (diskinfo[id].type == DTYPE_HDS && diskinfo[id].sfh != NULL) {
+#if BOOTWAIT_SCREEN
+            if (id == 0 && diskinfo[id].smb2 == NULL && bw_is_direct() && (lba == 2 || lba == 3))
+                return bw_ipl_read(lba, buf);   /* SD カードの起動ディスク: 待ち IPL (S で設定画面) */
+#endif
             if (lba == 2) {
                 // boot loader
                 memcpy(buf, hdsboot, sizeof(hdsboot));

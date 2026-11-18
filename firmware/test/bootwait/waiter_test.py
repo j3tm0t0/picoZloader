@@ -74,7 +74,15 @@ class Pico:
         self.sysstat = 0
         self.retry = 0xffffffff                     # 次の再接続までの ms
         self.image = None
+        self.sd = False                             # 起動ディスクは SD カードの HDS (bw_direct)
         self._rd = READFN(self._read)
+
+    def direct(self, image):
+        """SD カードの HDS を電源投入の直後に開いた (virtual_disk.c の vd_init)"""
+        self.image = image
+        self.sd = True
+        self.hds_open = 1
+        self.lib.bw_direct()
 
     def _read(self, ctx, lba, buf):
         ctypes.memmove(buf, self.image[lba * 512:(lba + 1) * 512], 512)
@@ -91,6 +99,11 @@ class Pico:
 
     def disk(self, lba):
         b = (ctypes.c_uint8 * 512)()
+        if self.sd:                                 # LBA 2-3 だけ待ち IPL、ほかは SD の本物
+            if lba in (2, 3):
+                rc = self.lib.bw_ipl_read(lba, b)
+                return bytes(b), rc
+            return self.image[lba * 512:(lba + 1) * 512], 0
         rc = self.lib.bw_disk_read(lba, b)
         return bytes(b), rc
 
@@ -202,6 +215,7 @@ class Z:
         self.cache = {}
         self.polls = []
         self.poll_clock = []
+        self.poll_mono = []
         self.screen = []
         self.result = None
         u = self.uc = Uc(UC_ARCH_M68K, UC_MODE_BIG_ENDIAN)
@@ -282,6 +296,7 @@ class Z:
                     self.on_snap(self, len(self.polls) + 1)
                 self.polls.append(lba)
                 self.poll_clock.append(self.clock)
+                self.poll_mono.append(self.mono)
                 self.on_poll(self, len(self.polls))
                 if self.noreply > 0:
                     self.noreply -= 1
@@ -298,6 +313,7 @@ class Z:
         elif fn == 0xff:                            # 試験の終わり (偽の IPL / 設定メニュー)
             self.result = ('jumped', u.reg_read(UC_M68K_REG_PC), d[7] & 0xff, d[4])
             self.jump_ontime = self.clock
+            self.jump_mono = self.mono
             row = self.scr.before_clear[G.ROW_TRACK - 1]                  # 画面を戻す直前に出ていたもの
             self.final_stage = ([ch for ch, a in row], [a for ch, a in row])
             self.at_jump = self.restored()
@@ -576,7 +592,9 @@ def scenario_ready_at_once(fl):
     p.hds_open = 1
     z = Z(p)
     r = z.boot()
-    check(r[0] == 'jumped' and r[2] == 0x55 and len(z.polls) == 1, 'already open: chain-loads on the first poll (%r, %d polls)' % (r, len(z.polls)))
+    held = (z.jump_mono - z.poll_mono[0]) * 10 if r[0] == 'jumped' else 0
+    check(r[0] == 'jumped' and r[2] == 0x55 and 5000 <= held < 6500,
+          'already open: holds the screen ~5 s, then chain-loads (%r, %d ms, %d polls)' % (r, held, len(z.polls)))
 
 
 def scenario_clock_backwards(fl):
@@ -595,6 +613,38 @@ def scenario_clock_backwards(fl):
     secs = [int(m) for m in re.findall(r'経過 (\d+) 秒', z.text())]
     check(r[0] == 'jumped' and len(set(z.polls)) == len(z.polls) and secs == sorted(secs),
           'backwards ONTIME: fresh polls, seconds still count up (%r, %s)' % (r[0], secs))
+
+
+def scenario_sd():
+    """起動ディスクが SD カードの HDS: 控えなしで LBA 2 は待ち IPL、最初から READY、5 秒見せてから起動"""
+    p = Pico()
+    p.direct(hds_image())
+    z = Z(p)
+    r = z.boot()
+    check(z.read(0, 2)[:2] == b'\x60\x00' and z.read(0, 3) == bytes(512), 'SD: LBA 2 is the waiter, LBA 3 zero')
+    check(z.read(0, 0)[:8] == b'X68SCSI1' and z.read(0, 4)[:4] == b'X68K', 'SD: other LBAs from the card as is')
+    check(r[0] == 'jumped' and r[1] == 0x2004 and r[2] == 0x55 and r[3] == 0, 'SD: chain-loads the real IPL, d4 restored (%r)' % (r,))
+    held = (z.jump_mono - z.poll_mono[0]) * 10 if r[0] == 'jumped' else 0
+    check(5000 <= held < 6500, 'SD: screen held ~5 s before booting (%d ms)' % held)
+    T = lambda x: x.replace('\0', '')
+    msgs = [T(sn[G.ROW_MSG - 1][4:92]).strip() for sn in z.snaps]
+    cnt = [int(m.group(1)) for x in msgs for m in [re.match(r'(\d+) 秒後に起動します', x)] if m]
+    check(cnt and cnt[0] == 5 and cnt[-1] == 1 and cnt == sorted(cnt, reverse=True), 'SD: countdown 5..1 shown (%s)' % sorted(set(cnt), reverse=True))
+    check(any('S: 設定画面' in x for x in msgs), 'SD: countdown mentions S for the setting UI')
+    titles = set(T(sn[G.ROW_TITLE - 1][4:92]).strip() for sn in z.snaps[1:])
+    check(titles == {'起動の準備ができました'}, 'SD: title replaced, no SMB-waiting leftovers (%s)' % titles)
+    j = getattr(z, 'at_jump', {})
+    check(j and all(j.values()), 'SD: screen restored before the real IPL (%s)' % j)
+    check(p.state() == 'sd', 'SD: status snap=sd (%s)' % p.state())
+    check(p.flash() == Pico().flash(), 'SD: flash snapshot untouched')
+
+
+def scenario_sd_key_s():
+    p = Pico()
+    p.direct(hds_image())
+    z = Z(p, key_at=(3, 0x1f73))
+    r = z.boot()
+    check(r[0] == 'jumped' and r[2] == 0x77 and r[3] == 6, 'SD: S during the countdown loads the setting UI (%r)' % (r,))
 
 
 def scenario_f1(fl):
@@ -637,6 +687,8 @@ def main():
     scenario_f1(fl)
     scenario_key_s(fl)
     scenario_nohds(fl)
+    scenario_sd()
+    scenario_sd_key_s()
     print('FAILED %d' % fails if fails else 'all passed')
     return 1 if fails else 0
 

@@ -10,7 +10,8 @@
  * Pico から Z へ ◆ が走る行、反転の案内。文字列・紋章・配置は mkbootwait.py が作る bootwait_gen.S。
  * 0.5 秒ごとに ID 6 の BW_BAND (src/bootwait_proto.h) を毎回違う番地で読み、
  *   BW_READY   -> 画面を元に戻し (パレット・プレーン 2-3・カーソル)、本物の IPL (1KB) を $2000 に置いて飛ぶ
- *                 (ROM から来たときの d4 = SCSI ID を戻す)
+ *                 (ROM から来たときの d4 = SCSI ID を戻す)。ただし最初の答えから HOLD_MS 経つまでは「n 秒後に
+ *                 起動します」と出して問い合わせを続ける (SD カードの HDS は最初から READY なので、S を押す間を作る)
  *   BW_CHANGED -> 「電源を入れ直してください」と出して止まる
  *   それ以外   -> 欄を書き直す
  * S か F1 で設定画面 (hdsboot.S の F1 と同じ settingui を ID 6 から読む。画面は元に戻してから)。
@@ -52,6 +53,8 @@ H_UPTIME    = 12
 H_LBA       = 16
 H_SUM       = 20
 H_RETRY     = 24
+
+HOLD_MS     = 5000                      /* 準備ができても、画面を出してからこれだけは見せる (Pico の時計で数える) */
 
 entry:
     .ascii  "BW2!"                      /* 前半が確かめる */
@@ -177,6 +180,32 @@ ready:                                  /* IPL の和を確かめてから画面
     dbra    %d1,1b
     cmp.l   V_HDR+H_SUM.w,%d0
     bne     noresp
+    move.l  V_UP.w,%d0                  /* 画面を出してから HOLD_MS 経つまでは起動しない (S / F1 を押す間) */
+    sub.l   V_UP0.w,%d0
+    cmpi.l  #HOLD_MS,%d0
+    bcc     boot
+    bsr     draw_status                 /* (d0-d7 を壊す) */
+    lea.l   %pc@(s_title_ready),%a1
+    moveq.l #C_TEXT,%d6
+    bsr     cprint
+    movea.w #LINE,%a3
+    movea.l %a3,%a5
+    move.l  #HOLD_MS+999,%d0            /* 残り (秒に切り上げる) */
+    add.l   V_UP0.w,%d0
+    sub.l   V_UP.w,%d0
+    bsr     putsec
+    lea.l   %pc@(m_hold),%a4
+    bsr     copystr
+    moveq.l #MSG_W,%d7
+    bsr     padw
+    lea.l   %pc@(e_msg),%a1
+    moveq.l #C_OK,%d6
+    bsr     lprint
+    moveq.l #4,%d7
+    bsr     draw_stages
+    bra     loop                        /* 0.5 秒ごとの問い合わせを続ける (答えは READY のまま) */
+
+boot:
     bsr     draw_status                 /* 全部の段階を点けて 0.5 秒見せてから */
     moveq.l #4,%d7
     bsr     draw_stages

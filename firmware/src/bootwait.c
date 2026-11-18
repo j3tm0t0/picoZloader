@@ -14,6 +14,10 @@
  *      本物の IPL を渡す (キャッシュには本物と同じ分割表・ドライバが入っている)。控えと違えば BW_CHANGED を返し、
  *      待ち IPL は「電源を入れ直してください」と出して止まる (古い分割表のまま起動させない)。
  *
+ * 起動ディスクが SD カードの HDS のときは (bw_direct)、電源投入の直後から開けているので控えは使わない。LBA 2-3 だけ
+ * 待ち IPL にして (bw_ipl_read)、ほかは本物を返す。待ち IPL は最初から READY を受け取り、HOLD_MS (bootwait.S、5 秒) だけ
+ * 画面を出して S / F1 を待ってから本物の IPL に進む。
+ *
  * 書き込みや比較は接続タスク、bw_disk_read / bw_reply は USB タスクから呼ばれる。
  */
 #include <stdio.h>
@@ -48,6 +52,7 @@ static int usable = -1;                 /* 控えが壊れていないか (-1: �
 static volatile bool served;            /* この USB の接続で控えを Z に返した */
 static volatile bool checked, match;    /* HDS を開いて比べた / 控えと同じだった */
 static uint32_t ipl_sum;                /* BW_READY で渡す IPL の和 (待ち IPL が確かめる) */
+static bool direct;                     /* 起動ディスクは SD カードの HDS: 控えを使わず、いつも本物を読む (bw_direct) */
 
 static const struct bw_hdr *hdr(void)
 {
@@ -99,6 +104,25 @@ int bw_disk_read(uint32_t lba, uint8_t *buf)
         memcpy(buf, snap() + lba * 512, 512);
     }
     served = true;
+    return 0;
+}
+
+void bw_direct(void)
+{
+    direct = true;
+    checked = true;                     /* 比べるものは無い。match は偽のまま (IPL は rd で SD から読む) */
+}
+
+bool bw_is_direct(void)
+{
+    return direct;
+}
+
+int bw_ipl_read(uint32_t lba, uint8_t *buf)
+{
+    memset(buf, 0, 512);
+    if (lba == 2)
+        memcpy(buf, bootwait1, sizeof(bootwait1));
     return 0;
 }
 
@@ -215,6 +239,8 @@ void bw_reply(uint32_t lba, uint8_t *buf, int hds_open, int sysstat, uint32_t ip
 
 const char *bw_state(const char *path)
 {
+    if (direct)
+        return "sd";
     if (!checked)
         return bw_usable(path) ? "stored" : "none";
     if (served)

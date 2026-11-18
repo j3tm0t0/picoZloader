@@ -94,7 +94,12 @@ def strings():
         return esc(row, (96 - len(b)) // 2 + 1) + b
 
     t['s_sub'] = center(ROW_SUB, SUBTITLE)
-    t['s_title'] = center(ROW_TITLE, 'SMB 接続待ち… (Wi-Fi / SMB を確認してください)')
+    title = 'SMB 接続待ち… (Wi-Fi / SMB を確認してください)'
+    t['s_title'] = center(ROW_TITLE, title)
+    # 準備ができたあとの見せる間 (bootwait.S の HOLD_MS) の見出し。待ちの見出しを消せるよう同じ幅に空白で埋める
+    tw, rt = len(sj(title)), sj('起動の準備ができました')
+    lp = (tw - len(rt)) // 2
+    t['s_title_ready'] = esc(ROW_TITLE, (96 - tw) // 2 + 1) + b' ' * lp + rt + b' ' * (tw - len(rt) - lp)
     t['s_labels'] = (esc(ROW_WIFI, COL_LABEL) + sj('Wi-Fi') + esc(ROW_SMB, COL_LABEL) + sj('SMB') +
                      esc(ROW_HDS, COL_LABEL) + sj('HDS') + esc(ROW_TIME, COL_LABEL) + sj('経過'))
     bar = ' S: 設定画面 (Wi-Fi / SMB / HDS)      ※ HDS を変えたら Z の電源を入れ直してください '
@@ -128,6 +133,7 @@ def strings():
     t['m_noresp'] = sj('Pico の応答がありません (SCSI ID 6)')
     t['m_nohds'] = sj('HDS を開けません。設定画面 (S) で config の HDS を確かめてください')
     t['m_changed'] = sj('HDS が変わりました。Z の電源を入れ直してください')
+    t['m_hold'] = sj(' 秒後に起動します (S: 設定画面)')
     t['m_rail'] = sj('━')
     t['m_packet'] = sj('◆')
     t['m_half'] = sj('bootwait: 2nd half missing')
