@@ -5,7 +5,7 @@
 # (firmware/ のサブモジュールの pico-sdk・FreeRTOS-Kernel は本家のままの古い版なので使わない)。
 # PICO_SDK_PATH / FREERTOS_KERNEL_PATH が既にあれば、それを使う。
 # 要るもの: cmake、arm-none-eabi-gcc、m68k-xelf-gcc (driver/ の 68000 側)、python3。
-# 例: SD カードのピンが GP16 MISO / GP17 CS の基板は  EXTRA_CFLAGS="-DSD_MISO=16 -DSD_CS=17" firmware/build-pico2w.sh /tmp/fw
+# 例: SD カードの MISO が GP20、CS が GP21 の基板は  EXTRA_CFLAGS="-DSD_MISO=20 -DSD_CS=21" firmware/build-pico2w.sh /tmp/fw
 set -euo pipefail
 FW=$(cd "$(dirname "$0")" && pwd); TOP=$(cd "$FW/.." && pwd)
 WORK=$1; shift; mkdir -p "$WORK"; WORK=$(cd "$WORK" && pwd)

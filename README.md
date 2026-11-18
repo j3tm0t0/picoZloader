@@ -57,7 +57,7 @@ firmware/build-pico2w.sh ~/pzl-work      # pico-sdk 2.1.1 と FreeRTOS-Kernel �
 # できたもの: firmware/build/x68kzremotedrv.uf2
 ```
 
-SD カードをつなぐ SPI0 の既定のピン割り当ては、GP18: SCK / GP19: MOSI / GP20: MISO / GP21: CS です。ピン割り当てが異なる基板では、`EXTRA_CFLAGS="-DSD_MISO=16 -DSD_CS=17"` のように指定します。書き込みは、BOOTSEL ボタンを押しながら Pico を Mac や PC に挿して、uf2 をコピーします。
+SD カードをつなぐ SPI0 の既定のピン割り当ては、GP16: MISO / GP17: CS / GP18: SCK / GP19: MOSI です。ピン割り当てが異なる基板では、`EXTRA_CFLAGS="-DSD_MISO=20 -DSD_CS=21"` のように指定します。書き込みは、BOOTSEL ボタンを押しながら Pico を Mac や PC に挿して、uf2 をコピーします。
 
 ### Human68k のプログラム
 

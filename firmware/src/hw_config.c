@@ -7,8 +7,8 @@
  *   GND          38 番ピン
  *   SCK          GP18 (24 番ピン)
  *   MOSI (DI)    GP19 (25 番ピン)
- *   MISO (DO)    GP20 (26 番ピン)
- *   CS           GP21 (27 番ピン)
+ *   MISO (DO)    GP16 (21 番ピン)
+ *   CS           GP17 (22 番ピン)
  * Pico 2 WH (2026-10-23): DAT1・DAT2・CS・MISO に 10k の外付けプルアップ (RP2350 の E9)。25MHz で 1MB の書き・読み・照合を
  * 330 回続けて失敗 0 (x68k-zos pico/test/sdsmoke)、37.5MHz はマウントできなかった
  * GP0 / GP1 は UART のログ、Wi-Fi (CYW43) は内部の GPIO を使うので、SPI0 の既定の位置が空いている
@@ -22,10 +22,10 @@
 #define SD_MOSI     19
 #endif
 #ifndef SD_MISO
-#define SD_MISO     20
+#define SD_MISO     16
 #endif
 #ifndef SD_CS
-#define SD_CS       21
+#define SD_CS       17
 #endif
 #ifndef SD_SPI_HZ
 #define SD_SPI_HZ   (25 * 1000 * 1000)
