@@ -11,7 +11,7 @@ Z のネットワークを運んでいる Pico W (RP2040、x68kzremotedrv の ne
 | `kex` | + X25519 keygen / shared | + 一時秘密鍵 → **Pico がセッション鍵を知る** | Pico (と Wi-Fi 越しにそのファーム) を信頼する |
 | `all` | + ed25519 sign (公開鍵認証) | + **署名鍵の seed** | Pico に秘密鍵を渡す |
 
-これとは別に、ssh.x は起動したときに Pico から乱数を 32 バイトもらい、乱数の種に混ぜる (段階に関係なく、`none` でも)。Z には `/dev/urandom` が無く、自前の種は MFP のタイマと時計から作るので弱い。Pico 2 W は RP2350 のハードウェアの TRNG を混ぜた `pico_rand` を返す。種は Z のタイマの値と Pico の乱数をまとめて SHA-256 にかけたものなので、Pico が知るのは材料の一部で、Pico を信頼しなくても前より弱くはならない。Pico が答えないとき (npd.sys が無い、古いファーム) は警告を 1 行出して、Z のタイマだけで続ける。npd.sys はあってファームが古いときは、PING の答えを 3 秒待つので、ssh.x の起動がそのぶん遅くなる。
+これとは別に、ssh.x は起動したときに Pico から乱数を 32 バイトもらい、乱数の種に混ぜる (段階に関係なく、`none` でも)。Z には `/dev/urandom` が無く、自前の種は MFP のタイマと時計から作るので弱い。Pico 2 W は RP2350 のハードウェアの TRNG を混ぜた `pico_rand` を返す。種は Z のタイマと時計の値と Pico の乱数をまとめて SHA-256 にかけたもの。Pico には Z の値を何も渡さない (nonce は 0) ので、Pico が知るのは材料のうち自分の乱数だけで、Pico を信頼しなくても前より弱くはならない。Pico が答えないとき (npd.sys が無い、古いファーム) は警告を 1 行出して、Z のタイマだけで続ける。npd.sys はあってファームが古いときは、PING の答えを 3 秒待つので、ssh.x の起動がそのぶん遅くなる (`RANDOM` の答えも 3 秒まで待つ)。
 
 見込み (Z 実機 65 秒 → `verify` 約 38 秒、`kex` 約 13 秒、`all` 約 6 秒 + 往復)。Pico 側の計算は数十〜数百 ms (下記)。
 
@@ -30,7 +30,7 @@ ssh.x ──accel.c──> npd.sys (ETD 20/21/22) ──ETD 19──> npd.x ─�
   - Pico → Z: `[0xA5][op][id 2][status][reserved][usec 4][結果]` (枠は IP と同じ `[長さ 2][空き 14][中身][詰め物]`)
   - op: `PING` (caps を返す) / `X25519` (scalar 32 + point 32 → 32) / `X25519_BASE` (scalar 32 → 32、基点 9) /
     `ED25519_VERIFY` (pk 32 + sig 64 + msg → status) / `ED25519_SIGN` (seed 32 + pk 32 + msg → 64) /
-    `RANDOM` (nonce 8 → 32。nonce は要求を毎回違う中身にするためのもので、時計の値を入れる。Pico は直前と同じ要求には前の結果を返すので)
+    `RANDOM` (nonce 8 → 32。nonce は Pico が使わず、ssh.x は 0 を送る。Pico は直前と同じ要求には前の結果を返すので、`RANDOM` の前に PING を送る)
   - status: `OK` / `BADSIG` (署名が違う) / `BADREQ` / `BADOP` / `BUSY` (計算中に別の要求) / `DISABLED` (ファームで無効)
   - **メッセージの上限 1024 バイト** (`ACCEL_MSG_MAX`)。ssh クライアントが署名 / 検証するのは、ホスト鍵の検証 = 交換ハッシュ
     (curve25519-sha256 で 32 バイト、`cli-kex.c` の `buf_verify(..., ses.hash)`) と、公開鍵認証の署名 = `string(session_id) +

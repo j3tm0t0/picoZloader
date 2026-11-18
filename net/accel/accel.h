@@ -17,7 +17,7 @@ int accel_x25519(uint8_t q[32], const uint8_t n[32], const uint8_t p[32]);      
 int accel_x25519_base(uint8_t q[32], const uint8_t n[32]);                      /* 0 / -1 */
 int accel_ed25519_verify(const uint8_t *m, unsigned mlen, const uint8_t sig[64], const uint8_t pk[32]);  /* 1 正しい / 0 違う / -1 */
 int accel_ed25519_sign(uint8_t sig[64], const uint8_t *m, unsigned mlen, const uint8_t seed[32], const uint8_t pk[32]);  /* 0 / -1 */
-int accel_random(uint8_t out[32], const uint8_t nonce[8]);                     /* 0 / -1 (caps に ACCEL_CAP_RANDOM が要る) */
+int accel_random(uint8_t out[32], const uint8_t nonce[8]);                     /* 0 / -1 (caps に ACCEL_CAP_RANDOM が要る。待つのは 3 秒まで) */
 
 /* 直前の呼び出しの計測: Pico での計算時間 (µs) と、Z で頼んでから結果を取るまでの時間 (1/100 秒)、Pico の status */
 uint32_t accel_last_usec(void);

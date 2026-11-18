@@ -14,8 +14,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <x68k/iocs.h>
-#include <x68k/dos.h>
 #include "accel.h"
 #include "x68k_accel.h"
 
@@ -100,20 +98,13 @@ static int usable(int cap)
 
 int x68k_pico_entropy(unsigned char *out)
 {
-  /* nonce は要求を毎回違う中身にするだけのもの。種の材料 (x68k_get_entropy のタイマの値) を Pico に見せないよう、
-     日付と起動からの時間 (秘密でない値) だけで作る。直前に PING を送っているので、同じ値でも前の結果は返らない */
-  unsigned char nonce[8];
-  struct iocs_time ot;
-  unsigned long d;
+  /* nonce は 0 を送る。Z の時計や日付は x68k_get_entropy が種の材料に使うので、Pico には何も見せない。
+     0 のままでも前の結果は返らない: 同じ ssh.x の中では先に PING を送っているので、Pico の「直前と同じ要求」の
+     キャッシュは PING の要求で上書きされている (Z を再起動して npd.sys の id が 1 からやり直しになっても同じ) */
+  static const unsigned char nonce[8];
   int r;
   if (open_once() < 0 || !(pico_caps & ACCEL_CAP_RANDOM))
     return -1;
-  ot = _iocs_ontime();
-  d = (unsigned long)_dos_getdate() ^ ((unsigned long)_dos_gettim2() << 8);
-  nonce[0] = (unsigned char)(ot.sec >> 24); nonce[1] = (unsigned char)(ot.sec >> 16);
-  nonce[2] = (unsigned char)(ot.sec >> 8);  nonce[3] = (unsigned char)ot.sec;
-  nonce[4] = (unsigned char)(d >> 24);      nonce[5] = (unsigned char)(d >> 16);
-  nonce[6] = (unsigned char)(d >> 8);       nonce[7] = (unsigned char)d;
   r = accel_random(out, nonce);
   if (logging && r == 0)
     fprintf(stderr, "accel: random from the Pico in %lu us\n", (unsigned long)accel_last_usec());

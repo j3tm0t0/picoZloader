@@ -28,9 +28,10 @@
 #define ACCEL_OP_ED25519_VERIFY 3   /* 引数: pk 32, sig 64, msg    -> 結果なし (status が 0 なら正しい署名) */
 #define ACCEL_OP_ED25519_SIGN   4   /* 引数: seed 32, pk 32, msg   -> 結果 64 (署名) */
 #define ACCEL_OP_RANDOM         5   /* 引数: nonce 8               -> 結果 32 (Pico の乱数。RP2350 は TRNG を混ぜた pico_rand)。
-                                       nonce は要求を毎回違う中身にするため (Z を再起動すると id が 1 から振り直しになり、
-                                       電源の入ったままの Pico が「直前と同じ要求」として前の結果を返さないように)。
-                                       秘密でない値 (時計など) にする。Z の種の材料を入れると Pico に漏れる */
+                                       nonce は Pico が使わない。ssh.x は 0 を送る (Z の時計などを入れると、Z の種の材料が
+                                       Pico に漏れる)。Pico は「直前と同じ要求」(id と中身が一致) に前の結果を返すので、
+                                       RANDOM の前には別の要求 (PING) を送っておく。Z を再起動して id が 1 から振り直しに
+                                       なっても、前回の RANDOM の結果が返らないように */
 
 /* status */
 #define ACCEL_ST_OK         0
