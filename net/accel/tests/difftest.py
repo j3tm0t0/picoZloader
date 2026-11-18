@@ -25,7 +25,9 @@ def check(name, cond):
     if not cond: fails += 1
 
 
-check("ping -> version 1, caps 7 (verify|x25519|sign)", run("ping") == "1 7")
+check("ping -> version 1, caps 15 (verify|x25519|sign|random)", run("ping") == "1 15")
+r1, r2 = run("random", "0102030405060708"), run("random", "0102030405060708")
+check("random -> 32 bytes, a new value every time", len(r1) == 64 and len(r2) == 64 and r1 != r2 and r1 != "00" * 32)
 
 # --- RFC 7748 section 5.2 (scalarmult) / 6.1 (Alice keygen + shared) ---
 check("RFC7748 5.2 X25519", run("mul", "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",

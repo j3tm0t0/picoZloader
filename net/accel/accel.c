@@ -153,6 +153,11 @@ int accel_x25519_base(uint8_t q[32], const uint8_t n[32])
   return call(ACCEL_OP_X25519_BASE, n, 0, 0, q) == ACCEL_ST_OK ? 0 : -1;
 }
 
+int accel_random(uint8_t out[32], const uint8_t nonce[8])
+{
+  return call(ACCEL_OP_RANDOM, nonce, 0, 0, out) == ACCEL_ST_OK ? 0 : -1;
+}
+
 int accel_ed25519_verify(const uint8_t *m, unsigned mlen, const uint8_t sig[64], const uint8_t pk[32])
 {
   uint8_t f[96];

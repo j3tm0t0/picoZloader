@@ -312,10 +312,19 @@ int x68k_connect(const char *host, const char *port)
   return s;
 }
 
-/* --- エントロピー (弱い) --- */
+/* --- エントロピー (弱い。Pico の乱数を取れたら dbrandom.c で混ぜる) --- */
 /* MFP (MC68901) タイマのデータレジスタ C=$E88025 / D=$E88027 を IOCS _B_BPEEK で読む */
 #define MFP_TCDR ((const void *)0xE88025)
 #define MFP_TDDR ((const void *)0xE88027)
+#if !X68K_ACCEL
+/* ACCEL=1 で組まないと Pico に頼めない (本物は net/accel/dropbear/x68k_accel.c)。dbrandom.c が警告を出す */
+int x68k_pico_entropy(unsigned char *out, const unsigned char *nonce)
+{
+  (void)out; (void)nonce;
+  return -1;
+}
+#endif
+
 void x68k_get_entropy(unsigned char *buf, int len)
 {
   int i;

@@ -139,7 +139,7 @@ int main(void)
   arg[0] = (long)res; arg[1] = sizeof res;
   n = (int)etd_dispatch(21, arg);
   accel_res_parse(res, n, &rop, &rid, &st, &rsv, &usec, &pr);
-  CHECK("ping after cancel: new id, caps 7, version 1", rid == (unsigned)id && st == 0 && rsv == 7 && pr[0] == 1);
+  CHECK("ping after cancel: new id, caps 15, version 1", rid == (unsigned)id && st == 0 && rsv == 15 && pr[0] == 1);
   /* 4. 変な要求は預からない */
   arg[0] = (long)"\x45\x00"; arg[1] = 2;
   CHECK("submit without ACCEL_MARK -> -2", etd_dispatch(20, arg) == -2);

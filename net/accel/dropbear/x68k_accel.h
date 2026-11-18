@@ -8,4 +8,5 @@ int x68k_accel_ed25519_verify(const unsigned char *m, unsigned long mlen,
                               const unsigned char *s, unsigned long slen, const unsigned char *pk);  /* 0 正しい / 1 違う / -1 */
 int x68k_accel_ed25519_sign(const unsigned char *m, unsigned long mlen, unsigned char *s, unsigned long *slen,
                             const unsigned char *sk, const unsigned char *pk);   /* 0 署名した / -1 */
+int x68k_pico_entropy(unsigned char *out, const unsigned char *nonce);   /* out 32 バイト、nonce 8 バイト。0 / -1 (Pico の乱数が取れない) */
 #endif

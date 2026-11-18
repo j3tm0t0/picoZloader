@@ -11,12 +11,12 @@ PY="$VENV/bin/python"
 [ -x "$PY" ] || { echo "venv がない: $VENV (python3 -m venv venv && venv/bin/pip install cryptography)"; exit 1; }
 N=${1:-300}
 OUT=${TMPDIR:-/tmp}/accel_tool
-cc -O2 -Wall -I.. -I../monocypher -o "$OUT" accel_tool.c ../accel_ops.c ../monocypher/monocypher.c ../monocypher/monocypher-ed25519.c
+cc -O2 -Wall -I.. -I../monocypher -o "$OUT" accel_tool.c hostrand.c ../accel_ops.c ../monocypher/monocypher.c ../monocypher/monocypher-ed25519.c
 
 echo "== 記録形式の往復 =="
 "$OUT" roundtrip 2000
 echo "== npd.sys の ETD 20..24 と Pico 側をつないだ模擬 =="
-cc -O1 -Wall -Wno-unused-function -I.. -I../monocypher -o "$OUT-npdsim" npdsim.c ../accel_ops.c ../monocypher/monocypher.c ../monocypher/monocypher-ed25519.c
+cc -O1 -Wall -Wno-unused-function -I.. -I../monocypher -o "$OUT-npdsim" npdsim.c hostrand.c ../accel_ops.c ../monocypher/monocypher.c ../monocypher/monocypher-ed25519.c
 "$OUT-npdsim"
 echo "== Monocypher 経由の計算を cryptography と差分 =="
 "$PY" -I difftest.py "$OUT" "$N"

@@ -5,6 +5,7 @@
  *   base SCALAR32               -> X25519 基点 (hex 32)
  *   edsign SEED32 PK32 MSGhex   -> 署名 (hex 64)
  *   edverify PK32 SIG64 MSGhex  -> "1" (ok) / "0" (bad)
+ *   random NONCE8               -> 乱数 (hex 32)
  *   roundtrip N                 -> 記録形式の組み立て / 解読の往復を N 回 (乱数の長さ)。"OK" か "FAIL ..."
  */
 #include <stdio.h>
@@ -49,7 +50,7 @@ int main(int argc, char **argv)
 {
   uint8_t fixed[96], msg[ACCEL_MSG_MAX], out[64];
   int rlen, st, rsv, mlen;
-  if (argc < 2) { fprintf(stderr, "usage: ping|mul|base|edsign|edverify|roundtrip ...\n"); return 2; }
+  if (argc < 2) { fprintf(stderr, "usage: ping|mul|base|edsign|edverify|random|roundtrip ...\n"); return 2; }
   if (!strcmp(argv[1], "ping")) {
     st = run(ACCEL_OP_PING, fixed, NULL, 0, out, &rlen, &rsv);
     printf("%d %d\n", st == 0 ? out[0] : -1, rsv); return 0;
@@ -77,12 +78,18 @@ int main(int argc, char **argv)
     st = run(ACCEL_OP_ED25519_VERIFY, fixed, msg, mlen, out, &rlen, NULL);
     printf("%d\n", st == ACCEL_ST_OK ? 1 : 0); return 0;
   }
+  if (!strcmp(argv[1], "random") && argc == 3) {
+    unhex(argv[2], fixed, 8);
+    st = run(ACCEL_OP_RANDOM, fixed, NULL, 0, out, &rlen, NULL);
+    if (st) { printf("ERR %d\n", st); return 1; }
+    phex(out, 32); return 0;
+  }
   if (!strcmp(argv[1], "roundtrip") && argc == 3) {
     int N = atoi(argv[2]), i, k;
     static uint8_t req[ACCEL_REQ_MAX], res[ACCEL_RES_MAX];
     srand(20261022);
     for (i = 0; i < N; i++) {
-      int op = rand() % 5, f = accel_req_fixed(op), ml = accel_req_has_msg(op) ? rand() % (ACCEL_MSG_MAX + 1) : 0;
+      int op = rand() % 6, f = accel_req_fixed(op), ml = accel_req_has_msg(op) ? rand() % (ACCEL_MSG_MAX + 1) : 0;
       int n, rop, m, rst, rrsv, rl = accel_res_len(op);
       unsigned id = rand() & 0xffff, rid;
       const uint8_t *pf, *pm, *pr;

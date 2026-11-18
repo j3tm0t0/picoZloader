@@ -12,7 +12,7 @@
 #include "accel_ops.h"
 
 #ifndef ACCEL_CAPS
-#define ACCEL_CAPS (ACCEL_CAP_VERIFY | ACCEL_CAP_X25519 | ACCEL_CAP_SIGN)
+#define ACCEL_CAPS (ACCEL_CAP_VERIFY | ACCEL_CAP_X25519 | ACCEL_CAP_SIGN | ACCEL_CAP_RANDOM)
 #endif
 
 static int cap_of(int op)
@@ -23,6 +23,7 @@ static int cap_of(int op)
   case ACCEL_OP_X25519_BASE:    return ACCEL_CAP_X25519;
   case ACCEL_OP_ED25519_VERIFY: return ACCEL_CAP_VERIFY;
   case ACCEL_OP_ED25519_SIGN:   return ACCEL_CAP_SIGN;
+  case ACCEL_OP_RANDOM:         return ACCEL_CAP_RANDOM;
   default:                      return 0;
   }
 }
@@ -72,6 +73,10 @@ int accel_compute(const uint8_t *req, int reqlen, uint8_t *res, uint32_t (*usec_
       rlen = 64;
       break;
     }
+    case ACCEL_OP_RANDOM:
+      accel_random_bytes(out, 32);
+      rlen = 32;
+      break;
     default:
       status = ACCEL_ST_BADOP;
       break;

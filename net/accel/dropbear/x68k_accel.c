@@ -9,6 +9,7 @@
  * 既定では出さない (使えない・失敗して Z で計算し直すときの警告だけは出す)。
  * 最初の呼び出しで npd.sys を探して Pico に PING し、使えなければ (古いファーム、npd.x 無し) 以後は自前で計算する。
  * Pico が返した caps に無い段階は使わない。
+ * 乱数 (x68k_pico_entropy) は段階に関係なく (none でも) 頼む。ssh.x は起動してすぐ、オプションを読む前に種を作るため。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,8 @@
 
 static int mode = -1;                   /* -1: まだ決めていない (環境変数を見る) */
 static int opened;                      /* 0 まだ / 1 使える / -1 使えない */
+static int pico_caps;                   /* PING で返った caps */
+static int warned;                      /* 「Z で計算する」の警告を出したか */
 static int logging;                     /* 1: caps と所要時間を出す */
 
 static int parse(const char *m)
@@ -48,30 +51,56 @@ void x68k_accel_setmode(const char *m)
   mode = parse(m);
 }
 
-/* cap の段階が使えるか。初回は npd.sys / Pico を確かめる */
+static int open_errcode;
+
+/* 初回だけ npd.sys を探して Pico に PING する。戻り値: 1 使える / -1 使えない */
+static int open_once(void)
+{
+  if (getenv("ACCEL_LOG") && strcmp(getenv("ACCEL_LOG"), "0"))
+    logging = 1;
+  if (opened == 0) {
+    int caps = accel_open();
+    if (caps < 0) {
+      open_errcode = caps;
+      opened = -1;
+    } else {
+      if (logging)
+        fprintf(stderr, "accel: Pico caps=%s%s%s%s\n", caps & ACCEL_CAP_VERIFY ? "verify " : "",
+              caps & ACCEL_CAP_X25519 ? "x25519 " : "", caps & ACCEL_CAP_SIGN ? "sign " : "",
+              caps & ACCEL_CAP_RANDOM ? "random" : "");
+      pico_caps = caps;
+      opened = 1;
+    }
+  }
+  return opened;
+}
+
+/* cap の段階が使えるか */
 static int usable(int cap)
 {
   if (mode < 0)
     mode = parse(getenv("ACCEL"));
-  if (getenv("ACCEL_LOG") && strcmp(getenv("ACCEL_LOG"), "0"))
-    logging = 1;
   if (!(mode & cap))
     return 0;
-  if (opened == 0) {
-    int caps = accel_open();
-    if (caps < 0) {
+  if (open_once() < 0) {
+    if (!warned)
       fprintf(stderr, "accel: not available (%s), computing on the X68000\n",
-              caps == -1 ? "npd.sys not loaded" : "no answer from the Pico (old firmware or npd.x not running)");
-      opened = -1;
-    } else {
-      if (logging)
-        fprintf(stderr, "accel: Pico caps=%s%s%s\n", caps & ACCEL_CAP_VERIFY ? "verify " : "",
-              caps & ACCEL_CAP_X25519 ? "x25519 " : "", caps & ACCEL_CAP_SIGN ? "sign" : "");
-      mode &= caps;
-      opened = 1;
-    }
+              open_errcode == -1 ? "npd.sys not loaded" : "no answer from the Pico (old firmware or npd.x not running)");
+    warned = 1;
+    return 0;
   }
-  return opened > 0 && (mode & cap);
+  return (mode & pico_caps & cap) != 0;
+}
+
+int x68k_pico_entropy(unsigned char *out, const unsigned char *nonce)
+{
+  int r;
+  if (open_once() < 0 || !(pico_caps & ACCEL_CAP_RANDOM))
+    return -1;
+  r = accel_random(out, nonce);
+  if (logging && r == 0)
+    fprintf(stderr, "accel: random from the Pico in %lu us\n", (unsigned long)accel_last_usec());
+  return r;
 }
 
 static void note(const char *what, int r)

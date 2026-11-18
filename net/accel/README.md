@@ -11,6 +11,8 @@ Z のネットワークを運んでいる Pico W (RP2040、x68kzremotedrv の ne
 | `kex` | + X25519 keygen / shared | + 一時秘密鍵 → **Pico がセッション鍵を知る** | Pico (と Wi-Fi 越しにそのファーム) を信頼する |
 | `all` | + ed25519 sign (公開鍵認証) | + **署名鍵の seed** | Pico に秘密鍵を渡す |
 
+これとは別に、ssh.x は起動したときに Pico から乱数を 32 バイトもらい、乱数の種に混ぜる (段階に関係なく、`none` でも)。Z には `/dev/urandom` が無く、自前の種は MFP のタイマと時計から作るので弱い。Pico 2 W は RP2350 のハードウェアの TRNG を混ぜた `pico_rand` を返す。種は Z のタイマの値と Pico の乱数をまとめて SHA-256 にかけたものなので、Pico が知るのは材料の一部で、Pico を信頼しなくても前より弱くはならない。Pico が答えないとき (npd.sys が無い、古いファーム) は警告を 1 行出して、Z のタイマだけで続ける。
+
 見込み (Z 実機 65 秒 → `verify` 約 38 秒、`kex` 約 13 秒、`all` 約 6 秒 + 往復)。Pico 側の計算は数十〜数百 ms (下記)。
 
 ## 仕組み
@@ -27,7 +29,8 @@ ssh.x ──accel.c──> npd.sys (ETD 20/21/22) ──ETD 19──> npd.x ─�
   - Z → Pico: `[0xA5][op][id 2][固定引数][メッセージ]`
   - Pico → Z: `[0xA5][op][id 2][status][reserved][usec 4][結果]` (枠は IP と同じ `[長さ 2][空き 14][中身][詰め物]`)
   - op: `PING` (caps を返す) / `X25519` (scalar 32 + point 32 → 32) / `X25519_BASE` (scalar 32 → 32、基点 9) /
-    `ED25519_VERIFY` (pk 32 + sig 64 + msg → status) / `ED25519_SIGN` (seed 32 + pk 32 + msg → 64)
+    `ED25519_VERIFY` (pk 32 + sig 64 + msg → status) / `ED25519_SIGN` (seed 32 + pk 32 + msg → 64) /
+    `RANDOM` (nonce 8 → 32。nonce は要求を毎回違う中身にするためのもの。Pico は直前と同じ要求には前の結果を返すので)
   - status: `OK` / `BADSIG` (署名が違う) / `BADREQ` / `BADOP` / `BUSY` (計算中に別の要求) / `DISABLED` (ファームで無効)
   - **メッセージの上限 1024 バイト** (`ACCEL_MSG_MAX`)。ssh クライアントが署名 / 検証するのは、ホスト鍵の検証 = 交換ハッシュ
     (curve25519-sha256 で 32 バイト、`cli-kex.c` の `buf_verify(..., ses.hash)`) と、公開鍵認証の署名 = `string(session_id) +
@@ -43,7 +46,7 @@ ssh.x ──accel.c──> npd.sys (ETD 20/21/22) ──ETD 19──> npd.x ─�
   - [`../npd/npd.c`](../npd/npd.c): `rec_in` が先頭 0xA5 のレコードを ETD 23 に回すだけ。送信は ETD 19 の出力に載るので、
     次のループで (`n > 0` になり) すぐ交換される。
   - [`accel.c`](accel.c) / [`accel.h`](accel.h): ユーザプログラム用の小さなライブラリ。`accel_open()` で npd.sys を探して PING し
-    caps を得る。`accel_x25519` / `accel_x25519_base` / `accel_ed25519_verify` / `accel_ed25519_sign`。ETD 呼び出しは
+    caps を得る。`accel_x25519` / `accel_x25519_base` / `accel_ed25519_verify` / `accel_ed25519_sign` / `accel_random`。ETD 呼び出しは
     `_dos_super` で囲み (ユーザモードから呼ぶとバスエラー)、待つ間は `_dos_change_pr` で譲る。時間切れ (既定 15 秒) で
     取り消して -1 を返す → 呼び出し側は自前の計算に落ちる。直前の呼び出しの Pico 計算時間 (µs) と Z の往復時間 (1/100 秒) を読める。
   - [`acceltest.c`](acceltest.c) → `acceltest.x [-n N]`: RFC 7748 (5.2 scalarmult、6.1 keygen / shared) と RFC 8032 (7.1 TEST 1〜3 の

@@ -16,6 +16,7 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "pico/time.h"
+#include "pico/rand.h"
 #include "hardware/sync.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -59,6 +60,16 @@ static void accel_task(void *params)
         st_done++;
         printf("accel: op %d id %u status %d %lu us\n", req[1], (unsigned)accel_get16(req + 2), last_res[4],
                (unsigned long)accel_get32(last_res + 6));
+    }
+}
+
+/* ACCEL_OP_RANDOM (accel_ops.c) の乱数。pico_rand は RP2350 ではハードウェアの TRNG を、RP2040 では ROSC を混ぜる */
+void accel_random_bytes(uint8_t *p, int n)
+{
+    while (n > 0) {
+        uint64_t r = get_rand_64();
+        for (int i = 0; i < 8 && n > 0; i++, n--)
+            *p++ = (uint8_t)(r >> (i * 8));
     }
 }
 

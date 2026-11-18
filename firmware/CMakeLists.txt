@@ -115,6 +115,7 @@ if(ACCEL_ENABLE)
         src/monocypher/monocypher.c
         src/monocypher/monocypher-ed25519.c
     )
+    target_link_libraries(${PROJECT_NAME} pico_rand)   # ACCEL_OP_RANDOM (RP2350 は TRNG)
 else()
     target_compile_definitions(${PROJECT_NAME} PRIVATE ACCEL_ENABLE=0)
 endif()

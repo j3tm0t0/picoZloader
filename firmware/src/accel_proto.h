@@ -27,6 +27,9 @@
 #define ACCEL_OP_X25519_BASE    2   /* 引数: scalar 32             -> 結果 32 (公開鍵、基点 9) */
 #define ACCEL_OP_ED25519_VERIFY 3   /* 引数: pk 32, sig 64, msg    -> 結果なし (status が 0 なら正しい署名) */
 #define ACCEL_OP_ED25519_SIGN   4   /* 引数: seed 32, pk 32, msg   -> 結果 64 (署名) */
+#define ACCEL_OP_RANDOM         5   /* 引数: nonce 8               -> 結果 32 (Pico の乱数。RP2350 は TRNG を混ぜた pico_rand)。
+                                       nonce は要求を毎回違う中身にするため (Z を再起動すると id が 1 から振り直しになり、
+                                       電源の入ったままの Pico が「直前と同じ要求」として前の結果を返さないように) */
 
 /* status */
 #define ACCEL_ST_OK         0
@@ -40,6 +43,7 @@
 #define ACCEL_CAP_VERIFY    0x01    /* 段階 1: ed25519 verify (公開情報だけ) */
 #define ACCEL_CAP_X25519    0x02    /* 段階 2: X25519 keygen / shared (Pico がセッション鍵を知る) */
 #define ACCEL_CAP_SIGN      0x04    /* 段階 3: ed25519 sign (署名鍵の seed を渡す) */
+#define ACCEL_CAP_RANDOM    0x08    /* 乱数 (ssh.x の乱数の種に混ぜる) */
 
 #define ACCEL_REQ_HDR       4       /* MARK op id(2) */
 #define ACCEL_RES_HDR       10      /* MARK op id(2) status reserved usec(4) */
@@ -63,6 +67,7 @@ static inline int accel_req_fixed(int op)
   case ACCEL_OP_X25519_BASE:    return 32;
   case ACCEL_OP_ED25519_VERIFY: return 96;
   case ACCEL_OP_ED25519_SIGN:   return 64;
+  case ACCEL_OP_RANDOM:         return 8;
   default:                      return -1;
   }
 }
@@ -82,6 +87,7 @@ static inline int accel_res_len(int op)
   case ACCEL_OP_X25519_BASE:    return 32;
   case ACCEL_OP_ED25519_VERIFY: return 0;
   case ACCEL_OP_ED25519_SIGN:   return 64;
+  case ACCEL_OP_RANDOM:         return 32;
   default:                      return 0;
   }
 }

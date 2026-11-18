@@ -74,7 +74,8 @@ sshd (例 ~/sshtest の :2222) が要る。
   `gethostbyname` を呼び、xip の resolver が数値 IP でも返らずハングするため)。
 - `x68k_connect`: **ブロッキング** connect した接続済み fd を返す。xip は
   非ブロッキング connect が不可 (EIO) なので。`cli-main.c` のパッチから呼ぶ。
-- `x68k_get_entropy`: `/dev/urandom` が無いので MFP タイマ等を撹拌した種。**弱い**。
+- `x68k_get_entropy`: `/dev/urandom` が無いので MFP タイマ等を撹拌した種。これだけでは**弱い**。
+- `x68k_pico_entropy`: Pico から乱数を 32 バイトもらう (`ACCEL=1` のビルドだけ。本体は `net/accel/dropbear/x68k_accel.c`)。取れなければ -1 を返し、`dbrandom.c` が警告を出して Z の種だけで続ける。
 - `getuid/getpwuid/ioctl/pipe/fsync/execv/setsid/basename/dirname` のスタブ。
 
 - `__wrap_write` (リンクに `-Wl,--wrap=write`): **ソケットへの write は 1 回 4096 バイトまで**。xip はノンブロッキングの
@@ -87,7 +88,7 @@ sshd (例 ~/sshtest の :2222) が要る。
 - `cli-main.c` : connect を `connect_remote` (非同期+select) から `x68k_connect`
   (同期ブロッキング) に差し替え。
 - `common-session.c` : シグナル用 `signal_pipe` を無効化 (Human68k にシグナル無し)。
-- `dbrandom.c` : `/dev/urandom` の代わりに `x68k_get_entropy` を使う。
+- `dbrandom.c` : `/dev/urandom` の代わりに `x68k_get_entropy` と `x68k_pico_entropy` (Pico 2 W は RP2350 の TRNG) を SHA-256 で混ぜる。
 - `dbutil.c` : `disallow_core` (setrlimit) を no-op に (Human68k に rlimit 無し)。
   `buf_readfile` (鍵ファイル) を `O_RDONLY | O_BINARY` で開く (newlib の既定はテキストモードで
   0x0d/0x1a を捨てるため、二進の秘密鍵が壊れて "Failed loading keyfile" になっていた)。
@@ -153,7 +154,7 @@ npd4.x が受信 TOS をクリアするようになったので IPQoS none の s
 (素の `FAST` 無しビルドは 1 回 15〜20 分かかり、grace を上げた sshd が要る)。
 
 鍵は dropbear 形式 (`dropbearkey -t ed25519 -f id_x68k`、OpenSSH 形式は `dropbearconvert`)。
-`-y -y` でホスト鍵検証を飛ばしている (known_hosts の扱いは未検証)。乱数源が弱いので実運用には不十分。
+`-y -y` でホスト鍵検証を飛ばしている (known_hosts の扱いは未検証)。乱数の種は Pico の乱数を混ぜる (`ACCEL=1` で組み、npd.x と新しいファームがあるとき)。取れないと `ssh: no random numbers from the Pico, ...` と出て、Z のタイマだけの弱い種になるので、その状態での実運用は勧めない。
 
 ### 対話セッション (`-t`)
 
