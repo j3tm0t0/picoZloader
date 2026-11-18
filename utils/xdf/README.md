@@ -49,6 +49,7 @@ BPB から形を読むので、2HQ (1440KB) のイメージも扱える。
 ## 試験
 
 `tests/xeij_xdf.py RUNDIR` が XEiJ (Compact、主記憶 2MB、フロッピー起動) を 7 回起動して試す (約 5 分。`ONLY=dosv` のように名前を指定すると、その試験だけ)。
+XEiJ は同梱していないので、環境変数 `XEIJ_TOOLS` に、`xeij/XEiJ.jar`・`xeij/HUMAN302.XDF`・`xeijagent.jar` を置いたディレクトリを指定する。画面の文字は `tests/xscreen.py` が XEiJ のテキスト VRAM を読んで取り出す。
 C: (装置 2) に乱数の XDF を入れた 2HQ、D: (装置 3) に空の 2HQ を入れ、XVI のリモートドライブの代わりにする。
 
 | 試験 | B: | 確かめること |
@@ -80,4 +81,4 @@ XEiJ は HUMAN302.XDF を読み込むとき、消されたファイル 2 つ (OP
 元の A: (XVIA.XDF) から起動した画面が同じかを比べる (CONFIG.SYS の常駐と AUTOEXEC.BAT の `RX`、`ZMUX7`、`TIS -p`、`NPD -m` の表示まで。
 RS-232C の相手が無いので、その先は比べない)。
 
-`tests/xeij_boot.py RUNDIR XDF [秒]` は、起動フロッピーを XEiJ で起動して指定の秒数あとの画面の文字を出す。
+`tests/xeij_boot.py RUNDIR XDF [秒]` は、起動フロッピーを XEiJ で起動して指定の秒数あとの画面の文字を出す (`XEIJ_TOOLS` が要る)。

@@ -33,7 +33,7 @@ static int cell_has_ink(int col, int row)
 int main(void)
 {
   int sup = _dos_super(0);
-  int r, c;
+  int r, c, ink5, ink3, ink4;
   FILE *f;
   /* clear planes 0,1 */
   for (r = 0; r < 1024; r++)
@@ -41,10 +41,13 @@ int main(void)
   blitA(0, 5);   /* cell row 5 = rasters 20..23 */
   /* 仮説: d1=(src<<8)|dst, d2=count(ラスタ), d3=plane mask. row5 の 4 ラスタ(20..23) を row3(12..15) へ */
   _iocs_txrascpy((20 << 8) | 12, 4, 0x000f);
+  ink5 = cell_has_ink(0, 5);   /* テキスト VRAM はスーパーバイザーモードでしか読めない */
+  ink3 = cell_has_ink(0, 3);
+  ink4 = cell_has_ink(0, 4);
   _dos_super(sup);
   f = fopen("/HOME/TXT.OUT", "wb");
   if (f) {
-    fprintf(f, "row5 ink=%d  row3 ink=%d  row4 ink=%d\n", cell_has_ink(0, 5), cell_has_ink(0, 3), cell_has_ink(0, 4));
+    fprintf(f, "row5 ink=%d  row3 ink=%d  row4 ink=%d\n", ink5, ink3, ink4);
     fclose(f);
   }
   return 0;

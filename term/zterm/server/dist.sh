@@ -8,6 +8,7 @@ set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${1:-$HERE/../dist}"
 mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"   # 相対パスでも、下で cd "$HERE" したあとに同じ場所を指すように
 cd "$HERE"
 declare -a T=(aarch64-unknown-linux-musl:linux-aarch64 x86_64-unknown-linux-musl:linux-x86_64 aarch64-apple-darwin:darwin-arm64 x86_64-apple-darwin:darwin-x86_64)
 for t in "${T[@]}"; do

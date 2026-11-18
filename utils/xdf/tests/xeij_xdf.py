@@ -11,9 +11,10 @@ usage: xeij_xdf.py RUNDIR
 import os, random, shutil, subprocess, sys, time
 here = os.path.dirname(os.path.abspath(__file__))
 xdf = os.path.dirname(here)
-top = os.path.abspath(os.path.join(xdf, "../.."))
-tools = os.environ.get("XEIJ_TOOLS", "/Users/moto/Dropbox/src/github.com/j3tm0t0/x68kcli/tools")
-HUMAN = os.path.join(tools, "xeij/HUMAN302.XDF")
+tools = os.environ.get("XEIJ_TOOLS")      # xeij/XEiJ.jar、xeij/HUMAN302.XDF、xeijagent.jar を置いたディレクトリ
+if not tools and __name__ == "__main__":
+    sys.exit("XEIJ_TOOLS に XEiJ の道具のディレクトリ (xeij/XEiJ.jar、xeij/HUMAN302.XDF、xeijagent.jar) を指定してください")
+HUMAN = os.path.join(tools or "", "xeij/HUMAN302.XDF")
 SIZE = 1261568
 run = os.path.abspath(sys.argv[1]) if __name__ == "__main__" else None
 py = [sys.executable, "-I"]
@@ -75,15 +76,19 @@ def xeij(name, fds, cmds, timeout=900):
     xe = subprocess.Popen(args, cwd=run, stdin=subprocess.DEVNULL, stdout=open(log, "w"), stderr=subprocess.STDOUT)
     t0 = time.time()
     s = ""
+    err = ""
     try:
         while time.time() < t0 + timeout:
             time.sleep(2)
             if xe.poll() is not None: sys.exit("xeij_xdf: XEiJ exited (%s)" % log)
-            s = subprocess.run(py[:1] + [os.path.join(top, "boot/serial/test/xscreen.py"), run],
-                               capture_output=True, text=True).stdout
+            r = subprocess.run(py + [os.path.join(here, "xscreen.py"), run], capture_output=True, text=True)
+            if r.returncode != 0:            # 起動の直後は読めないことがあるので、打ち切りまで続ける
+                err = r.stderr.strip() or "exit %d" % r.returncode
+                continue
+            s, err = r.stdout, ""
             if "TESTDONE" in s: break
         else:
-            print(s); sys.exit("xeij_xdf: %s: timeout" % name)
+            print(s); sys.exit("xeij_xdf: %s: timeout%s" % (name, " (xscreen: %s)" % err if err else ""))
         agent("call xeij.FDC fdcTini")       # イメージをファイルに書き戻す
         for _ in range(50):
             time.sleep(0.2)

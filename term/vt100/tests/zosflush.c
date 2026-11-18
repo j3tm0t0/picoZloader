@@ -31,6 +31,8 @@ int main(int argc, char **argv)
     }
   }
   while (vt_flush_some(1)) ;
-  printf("seed %d nomove %d: final verify %d, mismatches %d\n", seed, nomove, vt_host_verify(), bad);
+  { int ok = vt_host_verify();
+    if (!ok) bad++;
+    printf("seed %d nomove %d: final verify %d, mismatches %d\n", seed, nomove, ok, bad); }
   return bad != 0;
 }

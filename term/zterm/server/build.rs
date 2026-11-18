@@ -18,6 +18,7 @@ fn main() {
     let vt = env::var("ZTERM_VT100_DIR").unwrap_or_else(|_| "../../vt100".into());
     let kt = fs::read_to_string(Path::new(&vt).join("kanjitab.h")).expect("kanjitab.h");
     let et = fs::read_to_string(Path::new(&vt).join("emojitab.h")).expect("emojitab.h");
+    println!("cargo:rerun-if-env-changed=ZTERM_VT100_DIR");
     println!("cargo:rerun-if-changed={vt}/kanjitab.h");
     println!("cargo:rerun-if-changed={vt}/emojitab.h");
     // kanjitab: 表の本体 ("static const kanji_ent kanjitab[] = {" 以降) の "{0x" の直後が ucs
