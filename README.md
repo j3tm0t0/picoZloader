@@ -1,6 +1,6 @@
 # Pico Z Loader
 
-![X68000 Z の上に載せた Raspberry Pi Pico 2 W と microSD の基板](docs/images/z-pico2w-sd.jpg)
+![X68000 Z に出る Pico Z Loader の起動画面](docs/images/boot-screen.png)
 
 X68000 Z の USB に挿した Raspberry Pi Pico 2 W (と microSD カード) を、ディスク・ネットワーク・キーボードとして使うためのファームと、Human68k のドライバやプログラムをまとめたリポジトリです。
 
@@ -24,7 +24,7 @@ X68000 Z の USB に挿した Raspberry Pi Pico 2 W (と microSD カード) を�
 |---|---|
 | ディスク | 共有フォルダ (SMB) の HDS とリモートドライブ (x68kzremotedrv の機能) |
 | SD カード | microSD の HDS から起動する。SD カードを C: ドライブとして使う |
-| 起動待ち画面 | HDS を開けるまで Z の起動を待たせ、接続の状況を Z の画面に表示する。[S] キーで設定画面を開く |
+| 起動画面 | 電源を入れると Z に出る画面 (このページの一番上の画像)。HDS を開けるまで Z の起動を待たせ、Wi-Fi の接続、SMB (共有フォルダ) の接続、HDS の状態を表示する。起動の準備ができても 5 秒は表示を続け、その間に [S] キーを押すと設定画面を開ける |
 | TCP/IP | Z の `tis.x -p` からの TCP / UDP / DNS の要求を、Pico の lwIP で処理する。`.local` の名前解決には mDNS を使う |
 | 暗号の計算 | ssh の鍵交換と署名 (X25519 / Ed25519) を、Z の代わりに Pico で計算する |
 | USB キーボード | Pico を USB キーボードとしても認識させ、Wi-Fi 経由 (UDP ポート 6869) で Z にキー入力を送れる |
@@ -43,6 +43,37 @@ Z と Pico の間では、SCSI ID 6 のディスクの決まった LBA (ブロ�
 | `term/vt100` | ssh.x の端末 (VT100、UTF-8 の日本語と絵文字) |
 | `term/zterm` | 接続先で動く補助プログラム (Rust) と組んで画面を送る端末。ローカルエコー付き |
 | `utils/` | `crtmode.x` (画面モードの切り替え)、`modetest.x`、XDF の読み書き (`xdf`)、`x68key` (Mac や Raspberry Pi から Z にキーを打つ道具、`picokbd`) |
+
+## SD カードから起動する
+
+![ブレッドボードに挿した Pico 2 W と microSD スロットを X68000 Z の上に載せたところ](docs/images/z-pico2w-sd.jpg)
+
+![Pico 2 W と microSD スロットの配線図](docs/images/sd-wiring.svg)
+
+Pico 2 W に microSD スロットを SPI でつなぐと、カードに置いた HDS から Z を起動できます。カードの HDS は Wi-Fi の接続を待たずに開くので、共有フォルダの HDS より早く起動します。
+
+| Pico 2 W | microSD |
+|---|---|
+| GP16 (21 番ピン) | DAT0 / DO (MISO) |
+| GP17 (22 番ピン) | DAT3 / CS |
+| GP18 (24 番ピン) | CLK (SCK) |
+| GP19 (25 番ピン) | CMD / DI (MOSI) |
+| 3V3(OUT) (36 番ピン) | VDD |
+| GND (38 番ピン) | VSS |
+
+- 写真の基板は、プルアップ抵抗なしで動いています。RP2350 のエラッタ E9 (入力に設定したピンの接続先が高インピーダンスのとき、ピンの電圧が中間電位にとどまることがある不具合) の対策をするなら、DAT1・DAT2・CS・MISO を 10kΩ で 3V3 にプルアップしてください。
+- 39・40 番ピン (VSYS・VBUS) は 5V です。microSD スロットにはつながないでください。
+- 写真の基板は秋月電子の AE-MICRO-SD-DIP です。SPI のクロックは 25MHz です。
+
+設定画面の HDS の欄、または Pico を PC に USB でつないだときに見える `config.txt` の HDS の項目に、`sd:` で始まる SD カード上のパスを書きます。
+
+```
+HDS0: sd:/x68000z/boot.hds
+REMOTE_UNIT: 2
+REMOTE1: sd:/
+```
+
+リモートドライブの欄に `sd:/` と書くと、SD カードを Z のドライブとして使えます。上の例では、`REMOTE0` に設定した共有フォルダが B:、`REMOTE1` に設定した SD カードが C: になります。
 
 ## 作り方
 
