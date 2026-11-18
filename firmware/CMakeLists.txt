@@ -44,7 +44,24 @@ else()
     option(SD_CARD "microSD on SPI0 (FatFs)" OFF)
 endif()
 if(SD_CARD)
-    add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/FatFs_SD/src FatFs_SD)
+    # lib/FatFs_SD の CMakeLists.txt (add_subdirectory) は使わず、SPI の部分だけで同じ名前のライブラリを作る。
+    # SDIO の部分 (sd_driver/SDIO/) は ZuluSCSI (GPL-3) 由来なので入れない。sd_card.c から呼ばれる 2 つは
+    # src/sd_nosdio.c の空の関数 (SPI だけなので呼ばれない)。
+    set(FATFS_SD ${CMAKE_CURRENT_LIST_DIR}/lib/FatFs_SD/src)
+    add_library(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE)
+    target_compile_definitions(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE PICO_MAX_SHARED_IRQ_HANDLERS=8u)
+    target_sources(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
+        ${FATFS_SD}/ff15/source/ff.c ${FATFS_SD}/ff15/source/ffsystem.c ${FATFS_SD}/ff15/source/ffunicode.c
+        ${FATFS_SD}/sd_driver/dma_interrupts.c ${FATFS_SD}/sd_driver/sd_card.c ${FATFS_SD}/sd_driver/sd_timeouts.c
+        ${FATFS_SD}/sd_driver/SPI/my_spi.c ${FATFS_SD}/sd_driver/SPI/sd_card_spi.c ${FATFS_SD}/sd_driver/SPI/sd_spi.c
+        ${FATFS_SD}/src/crash.c ${FATFS_SD}/src/crc.c ${FATFS_SD}/src/f_util.c ${FATFS_SD}/src/ff_stdio.c
+        ${FATFS_SD}/src/file_stream.c ${FATFS_SD}/src/glue.c ${FATFS_SD}/src/my_debug.c ${FATFS_SD}/src/my_rtc.c
+        ${FATFS_SD}/src/util.c
+        ${CMAKE_CURRENT_LIST_DIR}/src/sd_nosdio.c)
+    target_include_directories(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
+        ${FATFS_SD}/ff15/source ${FATFS_SD}/sd_driver ${FATFS_SD}/include)
+    target_link_libraries(no-OS-FatFS-SD-SDIO-SPI-RPi-Pico INTERFACE
+        hardware_dma hardware_pio hardware_spi pico_aon_timer pico_stdlib cmsis_core)
     # file_stream.c は fopencookie (GNU 拡張) を使う。使わないが、ライブラリがまとめて入れるのでここだけ GNU にする
     set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/lib/FatFs_SD/src/src/file_stream.c PROPERTIES COMPILE_DEFINITIONS _GNU_SOURCE)
 endif()
