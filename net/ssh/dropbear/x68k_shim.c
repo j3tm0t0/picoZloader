@@ -318,9 +318,9 @@ int x68k_connect(const char *host, const char *port)
 #define MFP_TDDR ((const void *)0xE88027)
 #if !X68K_ACCEL
 /* ACCEL=1 で組まないと Pico に頼めない (本物は net/accel/dropbear/x68k_accel.c)。dbrandom.c が警告を出す */
-int x68k_pico_entropy(unsigned char *out, const unsigned char *nonce)
+int x68k_pico_entropy(unsigned char *out)
 {
-  (void)out; (void)nonce;
+  (void)out;
   return -1;
 }
 #endif

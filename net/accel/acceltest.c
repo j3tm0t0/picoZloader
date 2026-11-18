@@ -70,8 +70,8 @@ int main(int argc, char **argv)
     return 1;
   }
   report("ping", 1, caps);
-  printf("caps: %s%s%s\n", caps & ACCEL_CAP_VERIFY ? "verify " : "", caps & ACCEL_CAP_X25519 ? "x25519 " : "",
-         caps & ACCEL_CAP_SIGN ? "sign" : "");
+  printf("caps: %s%s%s%s\n", caps & ACCEL_CAP_VERIFY ? "verify " : "", caps & ACCEL_CAP_X25519 ? "x25519 " : "",
+         caps & ACCEL_CAP_SIGN ? "sign " : "", caps & ACCEL_CAP_RANDOM ? "random" : "");
 
   for (k = 0; k < N; k++) {
     /* X25519 */
@@ -118,6 +118,15 @@ int main(int argc, char **argv)
     report("verify 200-byte", r == 1, r);
     r = accel_ed25519_verify(msg, 32, sig2, pk);
     report("verify 32-byte (hostkey size, bad)", r == 0, r);
+  }
+  if (caps & ACCEL_CAP_RANDOM) {
+    static const uint8_t nonce[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    static const uint8_t zero[32];
+    /* 同じ nonce で 2 回: PING を挟まなくても毎回違う値が返ること (同じ要求でも id が違えば計算し直す) */
+    r = accel_random(a, nonce);
+    report("random", r == 0 && memcmp(a, zero, 32) != 0, r);
+    r = accel_random(b, nonce);
+    report("random again -> a different value", r == 0 && memcmp(a, b, 32) != 0, r);
   }
   printf("%d failure(s)\n", fails);
   return fails ? 1 : 0;

@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <x68k/iocs.h>
+#include <x68k/dos.h>
 #include "accel.h"
 #include "x68k_accel.h"
 
@@ -26,6 +28,7 @@ static int mode = -1;                   /* -1: まだ決めていない (環境�
 static int opened;                      /* 0 まだ / 1 使える / -1 使えない */
 static int pico_caps;                   /* PING で返った caps */
 static int warned;                      /* 「Z で計算する」の警告を出したか */
+static int caps_logged;                 /* +log の caps の行を出したか */
 static int logging;                     /* 1: caps と所要時間を出す */
 
 static int parse(const char *m)
@@ -64,10 +67,6 @@ static int open_once(void)
       open_errcode = caps;
       opened = -1;
     } else {
-      if (logging)
-        fprintf(stderr, "accel: Pico caps=%s%s%s%s\n", caps & ACCEL_CAP_VERIFY ? "verify " : "",
-              caps & ACCEL_CAP_X25519 ? "x25519 " : "", caps & ACCEL_CAP_SIGN ? "sign " : "",
-              caps & ACCEL_CAP_RANDOM ? "random" : "");
       pico_caps = caps;
       opened = 1;
     }
@@ -89,14 +88,32 @@ static int usable(int cap)
     warned = 1;
     return 0;
   }
+  /* PING は乱数の種を作るとき (オプションを読む前) に済んでいることがあるので、caps の行はここで出す */
+  if (logging && !caps_logged) {
+    fprintf(stderr, "accel: Pico caps=%s%s%s%s\n", pico_caps & ACCEL_CAP_VERIFY ? "verify " : "",
+            pico_caps & ACCEL_CAP_X25519 ? "x25519 " : "", pico_caps & ACCEL_CAP_SIGN ? "sign " : "",
+            pico_caps & ACCEL_CAP_RANDOM ? "random" : "");
+    caps_logged = 1;
+  }
   return (mode & pico_caps & cap) != 0;
 }
 
-int x68k_pico_entropy(unsigned char *out, const unsigned char *nonce)
+int x68k_pico_entropy(unsigned char *out)
 {
+  /* nonce は要求を毎回違う中身にするだけのもの。種の材料 (x68k_get_entropy のタイマの値) を Pico に見せないよう、
+     日付と起動からの時間 (秘密でない値) だけで作る。直前に PING を送っているので、同じ値でも前の結果は返らない */
+  unsigned char nonce[8];
+  struct iocs_time ot;
+  unsigned long d;
   int r;
   if (open_once() < 0 || !(pico_caps & ACCEL_CAP_RANDOM))
     return -1;
+  ot = _iocs_ontime();
+  d = (unsigned long)_dos_getdate() ^ ((unsigned long)_dos_gettim2() << 8);
+  nonce[0] = (unsigned char)(ot.sec >> 24); nonce[1] = (unsigned char)(ot.sec >> 16);
+  nonce[2] = (unsigned char)(ot.sec >> 8);  nonce[3] = (unsigned char)ot.sec;
+  nonce[4] = (unsigned char)(d >> 24);      nonce[5] = (unsigned char)(d >> 16);
+  nonce[6] = (unsigned char)(d >> 8);       nonce[7] = (unsigned char)d;
   r = accel_random(out, nonce);
   if (logging && r == 0)
     fprintf(stderr, "accel: random from the Pico in %lu us\n", (unsigned long)accel_last_usec());

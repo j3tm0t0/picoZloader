@@ -18,20 +18,19 @@
  }
  
  #if DROPBEAR_FUZZ
-@@ -247,7 +251,22 @@
+@@ -247,7 +251,21 @@
  #endif
  
  	if (!urandom_seeded) {
 -#if DROPBEAR_USE_PRNGD
 +#if DROPBEAR_X68K
 +		{ void x68k_get_entropy(unsigned char *, int);
-+		  int x68k_pico_entropy(unsigned char *, const unsigned char *);
-+		  unsigned char eb[INIT_SEED_SIZE], nb[8], pb[32];
++		  int x68k_pico_entropy(unsigned char *);
++		  unsigned char eb[INIT_SEED_SIZE], pb[32];
 +		  x68k_get_entropy(eb, sizeof eb);
 +		  sha256_process(&hs, eb, sizeof eb);
-+		  /* Pico の乱数 (RP2350 は TRNG) を混ぜる。nonce は要求を毎回違う中身にするためだけのもので、種には入れない */
-+		  x68k_get_entropy(nb, sizeof nb);
-+		  if (x68k_pico_entropy(pb, nb) == 0)
++		  /* Pico の乱数 (RP2350 は TRNG) を混ぜる */
++		  if (x68k_pico_entropy(pb) == 0)
 +		      sha256_process(&hs, pb, sizeof pb);
 +		  else
 +		      fprintf(stderr, "ssh: no random numbers from the Pico, seeding from the X68000 timers only (weak)\n");
