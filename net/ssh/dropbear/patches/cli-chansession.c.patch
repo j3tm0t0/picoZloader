@@ -1,0 +1,130 @@
+--- dropbear-2022.83/cli-chansession.c
++++ x68k/cli-chansession.c
+@@ -83,6 +83,20 @@
+ 	
+ 
+ /* If the main session goes, we close it up */
++#if DROPBEAR_X68K
++static void cli_closechansess(const struct Channel *channel) {
++	/* 仮想コンソール (x68k_shim.c): このチャネルのコンソールだけ閉じる。他のコンソールが残っている
++	   (表なら切り替えた) / zterm が始まらずに同じコンソールを -t で開き直す なら、画面は戻さずに終わり */
++	{
++		extern int x68k_vc_closed(int chan);
++		if (x68k_vc_closed(channel->index)) {
++			return;
++		}
++	}
++	cli_tty_cleanup(); /* Restore tty modes etc */
++	/* "Waiting for other channels" は出さない (stderr は画面を壊す。セッションのチャネルは全部コンソール) */
++}
++#else
+ static void cli_closechansess(const struct Channel *UNUSED(channel)) {
+ 	cli_tty_cleanup(); /* Restore tty modes etc */
+ 
+@@ -91,6 +105,7 @@
+ 		dropbear_log(LOG_INFO, "Waiting for other channels to close...");
+ 	}
+ }
++#endif
+ 
+ /* Taken from OpenSSH's sshtty.c:
+  * RCSID("OpenBSD: sshtty.c,v 1.5 2003/09/19 17:43:35 markus Exp "); */
+@@ -105,6 +120,10 @@
+ 		return;
+ 	}
+ 
++#if DROPBEAR_X68K
++	/* 画面を VT100 エミュレータ (term/vt100) に切り替える。以後 vt_fini まで DOS コンソールに触らない */
++	{ extern void x68k_tty_setup(void); x68k_tty_setup(); }
++#endif
+ 	if (tcgetattr(STDIN_FILENO, &tio) == -1) {
+ 		dropbear_exit("Failed to set raw TTY mode");
+ 	}
+@@ -136,6 +155,11 @@
+ 
+ 	TRACE(("enter cli_tty_cleanup"))
+ 
++#if DROPBEAR_X68K
++	/* コンソールを戻す (パレット・カーソル)。画面の内容は残す。raw モードの確認より前に呼ぶ:
++	   zterm (-Z) は pty を要求しないので raw モードにならないが、画面は占有している (切断で終わる場合も戻す) */
++	{ extern void x68k_tty_cleanup(void); x68k_tty_cleanup(); }
++#endif
+ 	if (cli_ses.tty_raw_mode == 0) {
+ 		TRACE(("leave cli_tty_cleanup: not in raw mode"))
+ 		return;
+@@ -282,10 +306,19 @@
+ 	buf_putbyte(ses.writepayload, 0);
+ 
+ 	/* Get the terminal */
++#if DROPBEAR_X68K
++	/* Human68k の TERM (x68000) はローカルのコンソールの話なので使わない。term/vt100 は xterm サブセット
++	   (色・代替画面・DECCKM) なので xterm を名乗る。環境変数 SSHTERM があればそれを送る */
++	term = getenv("SSHTERM");
++	if (term == NULL) {
++		term = "xterm";
++	}
++#else
+ 	term = getenv("TERM");
+ 	if (term == NULL) {
+ 		term = "vt100"; /* Seems a safe default */
+ 	}
++#endif
+ 	buf_putstring(ses.writepayload, term, strlen(term));
+ 
+ 	/* Window size */
+@@ -297,15 +330,21 @@
+ 	encrypt_packet();
+ 
+ 	/* Set up a window-change handler */
++#if DROPBEAR_X68K
++	/* Human68k にシグナルは無い (画面サイズも変わらない)。newlib の signal() は通るが失敗しても無視 */
++	(void)signal(SIGWINCH, sigwinch_handler);
++#else
+ 	if (signal(SIGWINCH, sigwinch_handler) == SIG_ERR) {
+ 		dropbear_exit("Signal error");
+ 	}
++#endif
+ 	TRACE(("leave send_chansess_pty_req"))
+ }
+ 
+ static void send_chansess_shell_req(const struct Channel *channel) {
+ 
+ 	char* reqtype = NULL;
++	x68dbg("exec-request");
+ 
+ 	TRACE(("enter send_chansess_shell_req"))
+ 
+@@ -353,6 +392,11 @@
+ 
+ static int cli_initchansess(struct Channel *channel) {
+ 
++#if DROPBEAR_X68K
++	/* 仮想コンソール (x68k_shim.c): 2 つ目以降のコンソールのチャネルなら、その pty 要求とコマンド
++	   (-t: pty + ログインシェル、-Z: zterm の起動スクリプト) を cli_opts に入れる。最初のチャネルはそのまま */
++	{ extern void x68k_vc_initchan(int, int *, char **); x68k_vc_initchan(channel->index, &cli_opts.wantpty, &cli_opts.cmd); }
++#endif
+ 	cli_init_stdpipe_sess(channel);
+ 
+ #if DROPBEAR_CLI_AGENTFWD
+@@ -413,6 +457,21 @@
+ }
+ #endif
+ 
++#if DROPBEAR_X68K
++/* 仮想コンソール (x68k_shim.c の x68k_vc_loop から): 同じ接続でセッションチャネルをもう 1 本開く。戻り値は
++   そのチャネルの番号 (newchannel と同じく最初の空き)、失敗は -1。pty・コマンドは開けたとき x68k_vc_initchan が決める */
++int x68k_open_session(void) {
++	unsigned int i;
++	for (i = 0; i < ses.chansize && ses.channels[i] != NULL; i++) {
++	}
++	if (send_msg_channel_open_init(STDIN_FILENO, &clichansess) == DROPBEAR_FAILURE) {
++		return -1;
++	}
++	encrypt_packet();
++	return (int)i;
++}
++#endif
++
+ void cli_send_chansess_request() {
+ 
+ 	TRACE(("enter cli_send_chansess_request"))
