@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pico 2 W 向けのファームを組み立てる。
 #   firmware/build-pico2w.sh WORK [cmake の追加の -D...]
-# WORK に pico-sdk 2.1.1 と raspberrypi/FreeRTOS-Kernel (RP2350 の port) を取ってくる
+# ビルドは firmware/build (BUILD= で変えられるが firmware/ の直下に限る)。WORK に pico-sdk 2.1.1 と raspberrypi/FreeRTOS-Kernel (RP2350 の port) を取ってくる
 # (firmware/ のサブモジュールの pico-sdk・FreeRTOS-Kernel は本家のままの古い版なので使わない)。
 # PICO_SDK_PATH / FREERTOS_KERNEL_PATH が既にあれば、それを使う。
 # 要るもの: cmake、arm-none-eabi-gcc、m68k-xelf-gcc (driver/ の 68000 側)、python3。
@@ -27,9 +27,10 @@ if [ -z "${FREERTOS_KERNEL_PATH:-}" ]; then
   FREERTOS_KERNEL_PATH=$WORK/FreeRTOS-Kernel
 fi
 git -C "$TOP" submodule update -q --init --depth 1 firmware/libsmb2 firmware/x68kserremote firmware/lib/FatFs_SD
-mkdir -p "$WORK/build"; cd "$WORK/build"
+BUILD=${BUILD:-$FW/build}   # CMakeLists.txt は $BUILD/../driver を見るので、firmware/ の直下に置く
+mkdir -p "$BUILD"; cd "$BUILD"
 CFLAGS="-include time.h -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion" \
   cmake -DPICO_BOARD=pico2_w -DPICO_PLATFORM=rp2350 -DPICO_SDK_PATH="$PICO_SDK_PATH" -DFREERTOS_KERNEL_PATH="$FREERTOS_KERNEL_PATH" \
         -DHID_KEYBOARD=ON "$@" "$FW" > cmake.log
 make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" > make.log 2>&1 || { tail -40 make.log; exit 1; }
-ls -l "$WORK/build/x68kzremotedrv.uf2"
+ls -l "$BUILD/x68kzremotedrv.uf2"
